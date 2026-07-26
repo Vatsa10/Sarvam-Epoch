@@ -20,6 +20,11 @@ def build_ws_url(language_code: str) -> str:
         "sample_rate": "16000",
         "high_vad_sensitivity": "true",
         "vad_signals": "true",
+        # Lets us force finalisation on Done. Without it the browser simply
+        # stops sending frames, Saaras sees no audio at all - not even
+        # silence - so its VAD never fires end-of-speech and no final ever
+        # arrives. The turn then vanishes with "nothing was picked up".
+        "flush_signal": "true",
     })
     return f"{sarvam.STT_WS_URL}?{q}"
 

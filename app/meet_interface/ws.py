@@ -147,7 +147,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
                         ctrl = _json.loads(raw_text)
                     except ValueError:
                         continue
-                    await _handle_control(room, me, ctrl.get("type", ""), state, ctrl)
+                    await _handle_control(room, me, ctrl.get("type", ""), state, ctrl, up)
 
             async def pump_down() -> None:
                 """Sarvam STT WS -> live captions for whoever currently holds
@@ -234,7 +234,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
 
 
 async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, state: dict,
-                          ctrl: dict | None = None) -> None:
+                          ctrl: dict | None = None, up=None) -> None:
     if kind == "set_out_lang":
         want = (ctrl or {}).get("lang", "")
         if not await rooms.set_out_lang(room, me, want):
@@ -269,6 +269,14 @@ async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, st
         # final arrives, then give a short grace for a trailing second one.
         # ponytail: fixed 6s ceiling; make it adaptive only if a long turn
         # is observed to time out.
+        # Tell Saaras the utterance is over. The browser has stopped sending
+        # frames, so without this there is no audio left to trigger its VAD and
+        # the final never comes - the turn silently disappears.
+        if up is not None:
+            try:
+                await up.send(_json.dumps({"type": "flush"}))
+            except Exception:  # noqa: BLE001
+                pass
         for _ in range(24):
             if state["buffer"]:
                 break
