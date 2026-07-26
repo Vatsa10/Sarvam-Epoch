@@ -548,19 +548,24 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
             await _tell_both("_wrapup", "Still to discuss: " + ", ".join(pending) + ".")
 
     if spoken and other is not None and voice:
-        try:
-            # Slower when the sheet just broke or a value is in doubt - a mediator
-            # that flags a divergence at the same clip as a routine relay sounds
-            # like it did not notice.
-            audio = await sarvam.tts(
-                spoken, other.out_lang, voice,
-                pace=sarvam.pace_for(
-                    sensitive=bool(res.flagged or res.clarification),
-                    relaying=not (res.flagged or res.clarification)),
-            )
-        except Exception:  # noqa: BLE001
-            audio = ""
-        # Even an empty payload is worth sending: it clears the listener's
-        # "speaking shortly" state instead of leaving it waiting forever.
-        await _send(room.code, other.party_id,
-                    {"type": "audio", "turn_idx": idx, "audio_b64": audio})
+        # DETACHED. _finish_turn is awaited by talk_done before the floor hands
+        # over, so awaiting Bulbul here made the OTHER party wait on synthesis
+        # before they could even press Talk. The text is already on their screen;
+        # the voice catches up on its own.
+        sensitive = bool(res.flagged or res.clarification)
+        listener_id, listener_lang = other.party_id, other.out_lang
+
+        async def _speak() -> None:
+            try:
+                audio = await sarvam.tts(
+                    spoken, listener_lang, voice,
+                    pace=sarvam.pace_for(sensitive=sensitive, relaying=not sensitive),
+                )
+            except Exception:  # noqa: BLE001
+                audio = ""
+            # Even an empty payload is worth sending: it clears the listener's
+            # "speaking shortly" state instead of leaving it waiting forever.
+            await _send(room.code, listener_id,
+                        {"type": "audio", "turn_idx": idx, "audio_b64": audio})
+
+        asyncio.create_task(_speak())

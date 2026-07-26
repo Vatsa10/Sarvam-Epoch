@@ -89,6 +89,9 @@ async def tts(text: str, target_language_code: str, speaker: str, pace: float = 
             "model": TTS_MODEL,
             "speaker": speaker,
             "pace": pace,
+            # 16k halves the payload versus the 24k default and is indistinguishable
+            # on a phone speaker - it is the relay latency that people notice.
+            "speech_sample_rate": 16000,
         },
     )
     r.raise_for_status()
