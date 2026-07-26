@@ -8,6 +8,12 @@ class PCMWorklet extends AudioWorkletProcessor {
     this.ratio = sampleRate / this.target;   // sampleRate is a worklet global
     this.pos = 0;
     this.buf = [];
+    this.port.onmessage = e => {
+      if (e.data && e.data.flush && this.buf.length) {
+        this.port.postMessage(Int16Array.from(this.buf));
+        this.buf = [];
+      }
+    };
   }
   process(inputs) {
     const ch = inputs[0][0];

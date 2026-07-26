@@ -84,7 +84,13 @@ async function startCapture(onChunk){
   const node = new AudioWorkletNode(ctx, 'pcm-worklet');
   node.port.onmessage = e => onChunk(e.data);
   src.connect(node);
-  return {stop(){
+  return {async stop(){
+    // Flush the worklet's partial buffer (up to ~99ms) before tearing down -
+    // the decisive word in a turn often lands right at the end of speech,
+    // so trailing audio must not be silently dropped. Give the message a
+    // brief window to arrive and reach onChunk before disconnecting.
+    node.port.postMessage({flush: true});
+    await new Promise(r => setTimeout(r, 30));
     node.port.onmessage = null;
     node.disconnect(); src.disconnect();
     stream.getTracks().forEach(t => t.stop());
