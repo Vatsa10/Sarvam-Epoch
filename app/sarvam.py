@@ -21,20 +21,22 @@ API_KEY = os.getenv("SARVAM_API_KEY", "")
 BASE = os.getenv("SARVAM_BASE", "https://api.sarvam.ai")
 
 STT_URL = f"{BASE}/speech-to-text"
+STT_WS_URL = "wss://api.sarvam.ai/speech-to-text/ws"
 TTS_URL = f"{BASE}/text-to-speech"
+TRANSLATE_URL = f"{BASE}/translate"
 CHAT_URL = f"{BASE}/v1/chat/completions"
 
 STT_MODEL = "saaras:v3"
 TTS_MODEL = "bulbul:v3"
-CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-m")
+CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-30b")
 
 HEADERS = {"api-subscription-key": API_KEY}
 
-# ponytail: two parties is the product, not a config surface. Add a third here if
-# the demo ever needs one - the mediator already keys everything by party id.
+# Speaker choice is language-dependent per Sarvam docs. These are the documented
+# picks; anushka/abhilash are v2-only and 400 on bulbul:v3.
 PARTIES = {
-    "vatsa":   {"name": "Vatsa",   "lang": "gu-IN", "label": "Gujarati", "speaker": "anushka"},
-    "sreedev": {"name": "Sreedev", "lang": "ml-IN", "label": "Malayalam", "speaker": "abhilash"},
+    "vatsa":   {"name": "Vatsa",   "lang": "gu-IN", "label": "Gujarati",  "speaker": "ratan"},
+    "sreedev": {"name": "Sreedev", "lang": "ml-IN", "label": "Malayalam", "speaker": "shubh"},
 }
 
 _client = httpx.AsyncClient(timeout=45.0)
