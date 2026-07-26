@@ -17,7 +17,7 @@ import string
 from dataclasses import dataclass, field
 from typing import Awaitable, TypeVar
 
-from .. import session
+from .. import memory, session
 from ..mediator import Negotiation
 from . import db, languages
 
@@ -181,7 +181,7 @@ async def persist_sheet(room: Room) -> None:
     await _best_effort(db.save_sheet(room.code, room.negotiation.sheet()), None)
 
 
-async def party_context(room: "Room") -> str:
+async def party_context(room: "Room", gloss: str | None = None) -> str:
     """Who these two are, what they came for, and what they settled last time.
 
     Prepended to every agent turn. Without it the mediator is generic: it cannot
@@ -222,6 +222,17 @@ async def party_context(room: "Room") -> str:
     if said:
         block += "\n\nTHEIR LAST FEW WORDS LAST TIME\n" + "\n".join(
             f"- {r['speaker_name']}: {r['text']}" for r in said)
+
+    # Semantic recall: what this SAME pair said about this SAME topic in a
+    # DIFFERENT room, found by meaning rather than exact wording - exact-match
+    # history above misses it whenever the topic resurfaces mid-call, not just
+    # at the top of the next session.
+    if gloss:
+        pair = memory.pair_key(keys)
+        rows = await _best_effort(memory.recall(pair, gloss, room.code), [])
+        recalled = memory.format_recall(rows)
+        if recalled:
+            block += "\n\n" + recalled
     return block
 
 

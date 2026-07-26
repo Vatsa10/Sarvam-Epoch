@@ -29,7 +29,7 @@ import time
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .. import agent, sarvam, stt_stream
+from .. import agent, memory, sarvam, stt_stream
 from ..mediator import TermState, Turn
 from . import languages, rooms
 
@@ -299,7 +299,7 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     # time they spoke. Best-effort by construction - no history must ever block a
     # live turn.
     try:
-        preamble = await rooms.party_context(room)
+        preamble = await rooms.party_context(room, gloss=gloss or None)
     except Exception:  # noqa: BLE001
         preamble = ""
 
@@ -343,6 +343,16 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     # Durable copy, keyed by party so a LATER negotiation between the same two can
     # be handed what was actually said rather than a summary of a summary.
     await rooms.record_utterance(room, party_id, transcript)
+
+    # Fire-and-forget: embedding is an extra network round-trip and this app's
+    # rule is memory never blocks a live turn. remember() already swallows its
+    # own failures, so there's nothing to await or check here.
+    keys = [p.key for p in room.participants.values() if p.key]
+    if len(keys) == 2 and gloss:
+        pair = memory.pair_key(keys)
+        term_key = res.flagged[0] if res.flagged else "general"
+        asyncio.create_task(memory.remember(
+            room.code, pair, term_key, speaker_name, speaker_lang, transcript, gloss))
 
     # TEXT FIRST, AUDIO AFTER. Bulbul takes about a second, and holding the whole
     # turn for it leaves the listener staring at nothing while the speaker has

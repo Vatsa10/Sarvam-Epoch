@@ -19,6 +19,7 @@ const STATE_STYLE: Record<string, string> = {
   DIVERGED: "bg-red-950 text-red-400",
   HEDGED: "bg-amber-950 text-amber-400",
   REJECTED: "bg-neutral-800 text-neutral-500",
+  PARKED: "bg-neutral-700 text-neutral-300",
 };
 
 export default function TermSheetPanel({

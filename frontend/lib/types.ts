@@ -5,7 +5,7 @@
 export type Language = { code: string; label: string };
 
 export type TermState =
-  | "OPEN" | "PROPOSED" | "AGREED" | "DIVERGED" | "HEDGED" | "REJECTED";
+  | "OPEN" | "PROPOSED" | "AGREED" | "DIVERGED" | "HEDGED" | "REJECTED" | "PARKED";
 
 export type Proposal = {
   party: string;
@@ -77,5 +77,5 @@ export type ServerEvent =
   | { type: "audio"; turn_idx: number; audio_b64: string }
   | { type: "floor"; holder: string; open: boolean }
   | { type: "recover"; text: string }
-  | { type: "resolve"; term: string; text: string }
+  | { type: "resolve"; term: string; text: string; parked?: boolean }
   | { type: "error"; text: string };
