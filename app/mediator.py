@@ -124,9 +124,11 @@ class Negotiation:
                 term.agreed_value = None
 
             elif prop.stance == "accept":
-                if prior is None:
-                    # accepting something nobody proposed - treat as a proposal
+                if prior is None or prior.stance in ("hedge", "reject"):
+                    # accepting something nobody proposed (or only hedged/rejected)
+                    # - treat as a proposal, not an agreement.
                     term.state = TermState.PROPOSED
+                    term.agreed_value = None
                 elif _same(prior.value, prop.value):
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value

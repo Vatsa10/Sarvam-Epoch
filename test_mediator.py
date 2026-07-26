@@ -107,6 +107,18 @@ def test_transcript_history_empty_is_safe():
     assert isinstance(Negotiation().transcript_history(), str)
 
 
+def test_accepting_a_hedge_does_not_create_agreement():
+    """Accepting a value that was only ever hedged must not upgrade it to AGREED -
+    a hedge prior should fold into the 'no real prior' branch, same as prior is None."""
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "dekhte hain", "stance": "hedge"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    assert n.terms["rent"].state is not TermState.AGREED
+    assert n.terms["rent"].agreed_value is None
+
+
 def test_cannot_agree_with_your_own_proposal():
     """A speaker accepting their OWN prior proposal is not agreement - there is no
     counterparty. Guards the single worst misattribution the product can make."""

@@ -87,6 +87,24 @@ def test_flag_divergence_needs_existing_proposals():
     assert "rent" not in res.flagged
 
 
+def test_flag_divergence_wins_over_update_term_in_same_turn():
+    """update_term is buffered and applied via neg.apply() AFTER the loop, while
+    flag_divergence used to mutate state inline - letting a same-turn update_term
+    silently overwrite the flag. flag_divergence must always win."""
+    neg = Negotiation()
+    apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "15000", "verbatim": "pandar hajaar", "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "sreedev", "ml-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "rent", "value": "15000", "verbatim": "pathinanju sari", "stance": "accept"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "rent", "note": "actually meant different values"}},
+    ], 1)
+    assert neg.terms["rent"].state is TermState.DIVERGED
+    assert neg.terms["rent"].agreed_value is None
+    assert "rent" in res.flagged
+
+
 def test_unknown_tool_is_ignored_not_crashed():
     neg = Negotiation()
     res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "nonexistent", "arguments": {}}], 0)

@@ -110,6 +110,7 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
     """
     res = TurnResult()
     updates: list[dict] = []
+    flags: list[tuple[str, str]] = []
 
     for call in calls:
         name = call.get("name")
@@ -118,19 +119,7 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
         if name == "update_term":
             updates.append(args)
         elif name == "flag_divergence":
-            key = args.get("term")
-            if key in neg.terms:
-                t = neg.terms[key]
-                # Defensive, not authoritative: only escalate a term that already
-                # carries provenance (proposals from at least one party). A term
-                # with no proposals has nothing to diverge between, and setting
-                # DIVERGED here would render with an empty quote list - the
-                # demo's key evidence, gone.
-                if t.proposals:
-                    t.state = TermState.DIVERGED
-                    t.agreed_value = None
-                    t.divergence_note = args.get("note", "")
-                    res.flagged.append(key)
+            flags.append((args.get("term"), args.get("note", "")))
         elif name == "request_clarification":
             res.clarification = args.get("question")
         elif name == "check_readiness":
@@ -142,6 +131,19 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
     if updates:
         res.flagged.extend(neg.apply(party, lang, updates, turn_idx))
         res.updates = updates
+
+    for key, note in flags:
+        t = neg.terms.get(key)
+        if t is not None and t.proposals:
+            # Defensive, not authoritative: only escalate a term that already
+            # carries provenance (proposals from at least one party). A term
+            # with no proposals has nothing to diverge between, and setting
+            # DIVERGED here would render with an empty quote list - the
+            # demo's key evidence, gone.
+            t.state = TermState.DIVERGED
+            t.agreed_value = None
+            t.divergence_note = note
+            res.flagged.append(key)
 
     # dedupe, preserve order
     res.flagged = list(dict.fromkeys(res.flagged))
