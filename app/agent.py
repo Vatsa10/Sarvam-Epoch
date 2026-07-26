@@ -103,7 +103,7 @@ restate their own position, that is `propose`, not `accept`."""
 
 
 def build_context(neg: Negotiation, party: str, transcript: str,
-                  gloss: str | None = None) -> str:
+                  gloss: str | None = None, preamble: str = "") -> str:
     """Everything the agent needs to attribute this utterance correctly.
 
     `gloss` is an English translation of the same utterance, and it is not a nicety.
@@ -249,7 +249,7 @@ def _parse_tool_calls(message: dict) -> list[dict]:
 
 async def run_turn(neg: Negotiation, party: str, lang: str,
                    transcript: str, turn_idx: int,
-                   gloss: str | None = None) -> TurnResult:
+                   gloss: str | None = None, preamble: str = "") -> TurnResult:
     """ONE model call per completed turn. Never called on a partial.
 
     Pass `gloss` (an English translation of `transcript`) whenever you can afford the
@@ -261,7 +261,7 @@ async def run_turn(neg: Negotiation, party: str, lang: str,
 
     message = await llm.complete_with_tools(
         system=SYSTEM,
-        user=build_context(neg, party, transcript, gloss),
+        user=build_context(neg, party, transcript, gloss, preamble),
         tools=TOOLS,
     )
     res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message),

@@ -18,13 +18,17 @@ export function connectMeet(
   name: string,
   lang: string,
   outLang: string,
+  role: string,
+  brief: string,
   onEvent: (e: ServerEvent) => void,
   onClose: () => void
 ): MeetSocket {
   const wsBase = BACKEND.replace(/^http/, "ws");
   const url = `${wsBase}/api/meet/ws/${encodeURIComponent(code)}?name=${encodeURIComponent(
     name
-  )}&lang=${encodeURIComponent(lang)}&out_lang=${encodeURIComponent(outLang || lang)}`;
+  )}&lang=${encodeURIComponent(lang)}&out_lang=${encodeURIComponent(
+    outLang || lang
+  )}&role=${encodeURIComponent(role)}&brief=${encodeURIComponent(brief)}`;
 
   const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";

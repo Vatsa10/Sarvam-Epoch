@@ -46,6 +46,9 @@ class Participant:
     name: str
     lang: str              # what they SPEAK - the STT source language
     out_lang: str = ""     # what they want to SEE/HEAR - captions + TTS target.
+    role: str = ""         # "landlord" | "tenant" - who they are in this deal
+    brief: str = ""        # what they came for, in their own words
+    key: str = ""          # identity ACROSS rooms, so a rematch can be resumed
                            # Empty means "same as lang" (backward compat).
 
     def __post_init__(self) -> None:
@@ -117,7 +120,11 @@ async def get_or_restore_room(code: str) -> Room | None:
     return room
 
 
-async def reserve_slot(code: str, name: str, lang: str, out_lang: str = "") -> tuple[Room, Participant] | None:
+OPPOSITE = {"landlord": "tenant", "tenant": "landlord"}
+
+
+async def reserve_slot(code: str, name: str, lang: str, out_lang: str = "",
+                       role: str = "", brief: str = "") -> tuple[Room, Participant] | None:
     """Claim a party_id in the room, or None if full/missing/unsupported language.
 
     `out_lang` (captions + TTS target) defaults to `lang` when absent."""
@@ -128,12 +135,27 @@ async def reserve_slot(code: str, name: str, lang: str, out_lang: str = "") -> t
     if room is None or room.is_full():
         return None
     party_id = "p1" if "p1" not in room.participants else "p2"
+
+    # The second person never picks a side. Whoever created the room declared
+    # theirs, so the joiner is the other one by construction - two landlords
+    # cannot negotiate a lease, and asking twice invites exactly that.
+    role = (role or "").strip().lower()
+    if party_id == "p2":
+        first = room.participants.get("p1")
+        if first is not None and first.role:
+            role = OPPOSITE.get(first.role, role)
+
     participant = Participant(party_id=party_id, name=name.strip()[:40] or "Guest",
-                              lang=lang, out_lang=out_lang)
+                              lang=lang, out_lang=out_lang, role=role,
+                              brief=(brief or "").strip()[:400],
+                              key=db.party_key(name))
     room.participants[party_id] = participant
     await _best_effort(
         db.upsert_participant(room.code, party_id, participant.name,
                               participant.lang, participant.out_lang), None)
+    await _best_effort(
+        db.upsert_role(room.code, party_id, participant.role,
+                       participant.brief, participant.key), None)
     return room, participant
 
 
@@ -157,3 +179,56 @@ async def release_slot(code: str, party_id: str) -> None:
 
 async def persist_sheet(room: Room) -> None:
     await _best_effort(db.save_sheet(room.code, room.negotiation.sheet()), None)
+
+
+async def party_context(room: "Room") -> str:
+    """Who these two are, what they came for, and what they settled last time.
+
+    Prepended to every agent turn. Without it the mediator is generic: it cannot
+    tell which side "maintenance separate" is being argued FROM, and two people who
+    negotiated last week start from zero. Every lookup is best-effort - missing
+    history must never block a live turn.
+    """
+    lines = []
+    for p in room.participants.values():
+        who = f"- {p.name} ({p.lang})"
+        if p.role:
+            who += f" is the {p.role.upper()}"
+        if p.brief:
+            who += f". They came for: {p.brief}"
+        lines.append(who)
+    block = "PARTIES\n" + ("\n".join(lines) if lines else "- (unknown)")
+
+    keys = [p.key for p in room.participants.values() if p.key]
+    if len(keys) < 2:
+        return block
+
+    prior = await _best_effort(db.prior_sessions(keys, room.code), [])
+    if prior:
+        settled = []
+        for term in (prior[0].get("sheet") or {}).get("terms", []):
+            if term.get("state") == "AGREED" and term.get("agreed_value"):
+                settled.append(f"{term['key']} = {term['agreed_value']}")
+            elif term.get("state") in ("DIVERGED", "HEDGED"):
+                settled.append(f"{term['key']} left UNRESOLVED ({term['state']})")
+        if settled:
+            block += (
+                "\n\nWHEN THESE TWO LAST SPOKE they had: " + "; ".join(settled[:6])
+                + ".\nTreat that as the starting point, NOT as already re-agreed - "
+                  "anything they want carried over they must restate now."
+            )
+
+    said = await _best_effort(db.prior_transcript(keys, room.code, limit=6), [])
+    if said:
+        block += "\n\nTHEIR LAST FEW WORDS LAST TIME\n" + "\n".join(
+            f"- {r['speaker_name']}: {r['text']}" for r in said)
+    return block
+
+
+async def record_utterance(room: "Room", party_id: str, text: str) -> None:
+    """Persist one spoken turn. Never raises - the call outranks the archive."""
+    p = room.participants.get(party_id)
+    if p is None or not text.strip():
+        return
+    await _best_effort(
+        db.append_transcript(room.code, party_id, p.key, p.name, p.lang, text), None)

@@ -7,13 +7,18 @@ import type { Language } from "@/lib/types";
 export default function JoinScreen({
   onReady,
 }: {
-  onReady: (code: string, name: string, lang: string, outLang: string) => void;
+  onReady: (code: string, name: string, lang: string, outLang: string,
+            role: string, brief: string) => void;
 }) {
   const [mode, setMode] = useState<"create" | "join">("create");
   const [name, setName] = useState("");
   const [lang, setLang] = useState("en-IN");
   const [outLang, setOutLang] = useState("en-IN");
   const [code, setCode] = useState("");
+  // Only the room CREATOR picks a side. Whoever joins gets the opposite
+  // automatically - two landlords cannot negotiate a lease.
+  const [role, setRole] = useState("landlord");
+  const [brief, setBrief] = useState("");
   const [languages, setLanguages] = useState<Language[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +41,8 @@ export default function JoinScreen({
     try {
       const roomCode = mode === "create" ? (await createRoom()).code : code.trim().toUpperCase();
       if (!roomCode) throw new Error("Enter a meeting code");
-      onReady(roomCode, name.trim(), lang, outLang || lang);
+      onReady(roomCode, name.trim(), lang, outLang || lang,
+              mode === "create" ? role : "", brief.trim());
     } catch (err) {
       setError((err as Error).message || "Could not start the call");
       setBusy(false);
@@ -111,6 +117,44 @@ export default function JoinScreen({
           </select>
           <span className="mt-1 block text-xs text-neutral-500">
             Captions and the spoken relay arrive in this language.
+          </span>
+        </label>
+
+        {/* Only the creator declares a side. The joiner is assigned the opposite
+            server-side, so the two can never end up on the same side of the deal. */}
+        {mode === "create" ? (
+          <label className="block text-sm">
+            You are the
+            <select
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              <option value="landlord">Landlord</option>
+              <option value="tenant">Tenant</option>
+            </select>
+            <span className="mt-1 block text-xs text-neutral-500">
+              Whoever joins with your code becomes the other side.
+            </span>
+          </label>
+        ) : (
+          <p className="text-xs text-neutral-500">
+            You&apos;ll be joining as the other side of this deal.
+          </p>
+        )}
+
+        <label className="block text-sm">
+          What you want <span className="text-neutral-500">(optional)</span>
+          <textarea
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            rows={2}
+            maxLength={400}
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            placeholder="e.g. 15000 a month, 11 month lease, maintenance separate"
+          />
+          <span className="mt-1 block text-xs text-neutral-500">
+            The mediator uses this to read your side of the conversation.
           </span>
         </label>
 

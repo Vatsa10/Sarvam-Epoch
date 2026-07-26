@@ -47,6 +47,31 @@ CREATE TABLE IF NOT EXISTS meet_participants (
 -- Tables predating the speak/hear language split are missing out_lang.
 ALTER TABLE meet_participants ADD COLUMN IF NOT EXISTS out_lang TEXT NOT NULL DEFAULT '';
 
+-- Role and brief make the agent situated rather than generic: it knows which side
+-- each speaker is on and what they came for, so "separate maintenance" reads
+-- differently from the landlord than from the tenant.
+ALTER TABLE meet_participants ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT '';
+ALTER TABLE meet_participants ADD COLUMN IF NOT EXISTS brief TEXT NOT NULL DEFAULT '';
+-- party_key is identity ACROSS rooms (a normalised name), which is what makes the
+-- next negotiation between the same two people resumable.
+ALTER TABLE meet_participants ADD COLUMN IF NOT EXISTS party_key TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS meet_participants_key_idx ON meet_participants (party_key);
+
+-- Append-only spoken record, in each speaker's own words. Kept per room so a later
+-- session between the same parties can be handed what was actually said last time
+-- rather than a summary of a summary.
+CREATE TABLE IF NOT EXISTS meet_transcripts (
+    id BIGSERIAL PRIMARY KEY,
+    room_code TEXT NOT NULL REFERENCES meet_rooms(code) ON DELETE CASCADE,
+    party_id TEXT NOT NULL,
+    party_key TEXT NOT NULL DEFAULT '',
+    speaker_name TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    text TEXT NOT NULL,
+    said_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS meet_transcripts_room_idx ON meet_transcripts (room_code, id);
+
 CREATE TABLE IF NOT EXISTS meet_sheets (
     room_code TEXT PRIMARY KEY REFERENCES meet_rooms(code) ON DELETE CASCADE,
     sheet_json JSONB NOT NULL,
@@ -133,3 +158,66 @@ async def load_sheet(code: str) -> dict[str, Any] | None:
     if row is None:
         return None
     return json.loads(row["sheet_json"])
+
+
+def party_key(name: str) -> str:
+    """Identity across rooms. A normalised name is crude but it is what the two
+    people actually re-enter, and asking them to remember an ID would defeat the
+    point. Swap for a real account id the moment there is one."""
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+async def upsert_role(code: str, party_id: str, role: str, brief: str, key: str) -> None:
+    pool = await get_pool()
+    await pool.execute(
+        """UPDATE meet_participants SET role = $3, brief = $4, party_key = $5
+           WHERE room_code = $1 AND party_id = $2""",
+        code, party_id, role, brief, key)
+
+
+async def append_transcript(code: str, party_id: str, key: str, name: str,
+                            lang: str, text: str) -> None:
+    pool = await get_pool()
+    await pool.execute(
+        """INSERT INTO meet_transcripts
+           (room_code, party_id, party_key, speaker_name, lang, text)
+           VALUES ($1, $2, $3, $4, $5, $6)""",
+        code, party_id, key, name, lang, text)
+
+
+async def prior_sessions(keys: list[str], exclude_code: str, limit: int = 2
+                         ) -> list[dict[str, Any]]:
+    """What these same people settled last time, most recent first.
+
+    Matched on BOTH party keys so an unrelated negotiation by someone with the
+    same name cannot leak in.
+    """
+    if len(keys) < 2:
+        return []
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT s.room_code, s.sheet_json, s.updated_at
+             FROM meet_sheets s
+            WHERE s.room_code <> $3
+              AND (SELECT COUNT(DISTINCT p.party_key) FROM meet_participants p
+                    WHERE p.room_code = s.room_code AND p.party_key = ANY($1::text[])) = 2
+            ORDER BY s.updated_at DESC
+            LIMIT $2""",
+        keys, limit, exclude_code)
+    return [{"code": r["room_code"], "sheet": r["sheet_json"],
+             "at": r["updated_at"]} for r in rows]
+
+
+async def prior_transcript(keys: list[str], exclude_code: str, limit: int = 12
+                           ) -> list[dict[str, Any]]:
+    """The last thing actually said between these two, in their own words."""
+    if len(keys) < 2:
+        return []
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """SELECT speaker_name, lang, text, said_at, room_code
+             FROM meet_transcripts
+            WHERE party_key = ANY($1::text[]) AND room_code <> $3
+            ORDER BY id DESC LIMIT $2""",
+        keys, limit, exclude_code)
+    return [dict(r) for r in reversed(rows)]

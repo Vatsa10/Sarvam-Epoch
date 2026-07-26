@@ -66,9 +66,13 @@ async def ws_room(client: WebSocket, code: str) -> None:
     lang = client.query_params.get("lang", "")
     # Absent out_lang means "I read/hear what I speak" - the pre-split behaviour.
     out_lang = client.query_params.get("out_lang", "")
+    # Declared once, on the way in. The joiner never picks a side - reserve_slot
+    # gives them the opposite of whoever created the room.
+    role = client.query_params.get("role", "")
+    brief = client.query_params.get("brief", "")
     await client.accept()
 
-    reservation = await rooms.reserve_slot(code, name, lang, out_lang)
+    reservation = await rooms.reserve_slot(code, name, lang, out_lang, role, brief)
     if reservation is None:
         await client.send_json({
             "type": "error",
@@ -83,9 +87,11 @@ async def ws_room(client: WebSocket, code: str) -> None:
 
     await client.send_json({
         "type": "joined",
-        "you": {"party_id": me.party_id, "name": me.name, "lang": me.lang, "out_lang": me.out_lang},
+        "you": {"party_id": me.party_id, "name": me.name, "lang": me.lang,
+                "out_lang": me.out_lang, "role": me.role, "brief": me.brief},
         "other": {"party_id": other.party_id, "name": other.name, "lang": other.lang,
-                  "out_lang": other.out_lang} if other else None,
+                  "out_lang": other.out_lang, "role": other.role,
+                  "brief": other.brief} if other else None,
         "sheet": room.negotiation.sheet(),
         "turn_holder": room.turn_holder, "floor_open": room.floor_open,
     })
@@ -93,7 +99,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
         await _send(room.code, other.party_id, {
             "type": "participant_joined",
             "party_id": me.party_id, "name": me.name, "lang": me.lang,
-            "out_lang": me.out_lang,
+            "out_lang": me.out_lang, "role": me.role, "brief": me.brief,
         })
 
     url = stt_stream.build_ws_url(me.lang)
@@ -277,9 +283,18 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     except Exception:  # noqa: BLE001
         gloss = ""
 
+    # Who these two are, what they each came for, and what they settled the last
+    # time they spoke. Best-effort by construction - no history must ever block a
+    # live turn.
+    try:
+        preamble = await rooms.party_context(room)
+    except Exception:  # noqa: BLE001
+        preamble = ""
+
     try:
         res = await agent.run_turn(room.negotiation, party_id, speaker_lang,
-                                   transcript, idx, gloss=gloss or None)
+                                   transcript, idx, gloss=gloss or None,
+                                   preamble=preamble)
     except Exception as e:  # noqa: BLE001
         for pid in room.participants:
             await _send(room.code, pid, {"type": "error", "text": f"agent failed: {e}"})
@@ -313,6 +328,9 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
         "speaker_id": party_id, "speaker_name": speaker_name,
         "lang": speaker_lang, "text": transcript, "ts": time.time(),
     })
+    # Durable copy, keyed by party so a LATER negotiation between the same two can
+    # be handed what was actually said rather than a summary of a summary.
+    await rooms.record_utterance(room, party_id, transcript)
 
     # TEXT FIRST, AUDIO AFTER. Bulbul takes about a second, and holding the whole
     # turn for it leaves the listener staring at nothing while the speaker has

@@ -34,11 +34,12 @@ export default function ConferenceRoom() {
     setCode(null);
   };
 
-  const join = async (roomCode: string, name: string, lang: string, outLang: string) => {
+  const join = async (roomCode: string, name: string, lang: string, outLang: string,
+                      role: string, brief: string) => {
     setCode(roomCode);
     useMeetStore.getState().setStatus("connecting");
 
-    const socket = connectMeet(roomCode, name, lang, outLang, applyServerEvent, () => {
+    const socket = connectMeet(roomCode, name, lang, outLang, role, brief, applyServerEvent, () => {
       useMeetStore.getState().setStatus("closed");
     });
     socketRef.current = socket;
