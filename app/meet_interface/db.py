@@ -79,6 +79,27 @@ CREATE TABLE IF NOT EXISTS meet_sheets (
 );
 """
 
+# Semantic recall over the ENGLISH GLOSS only (see app/memory.py) - the two parties
+# speak different languages, so embedding native text would scatter identical meaning
+# across the vector space instead of letting it cluster.
+VECTOR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS meet_memory (
+    id BIGSERIAL PRIMARY KEY,
+    room_code TEXT,
+    pair_key TEXT NOT NULL,
+    term TEXT NOT NULL DEFAULT '',
+    speaker_name TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    text TEXT NOT NULL,
+    gloss TEXT NOT NULL,
+    embedding vector(1536),
+    said_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS meet_memory_pair_idx ON meet_memory (pair_key);
+CREATE INDEX IF NOT EXISTS meet_memory_embedding_idx ON meet_memory
+    USING hnsw (embedding vector_cosine_ops);
+"""
+
 
 def _connect_kwargs() -> dict[str, Any]:
     u = urlparse(DATABASE_URL)
@@ -100,6 +121,13 @@ async def get_pool() -> asyncpg.Pool:
         _pool = await asyncpg.create_pool(min_size=1, max_size=5, **_connect_kwargs())
         async with _pool.acquire() as conn:
             await conn.execute(SCHEMA)
+            # A managed/shared Postgres role may lack CREATEEXTENSION rights - semantic
+            # recall is best-effort, so its absence must not break the base schema apply.
+            try:
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                await conn.execute(VECTOR_SCHEMA)
+            except Exception:
+                pass
     return _pool
 
 
