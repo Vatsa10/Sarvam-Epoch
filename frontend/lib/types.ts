@@ -54,7 +54,10 @@ export type LogEntry =
     };
 
 export type ServerEvent =
-  | { type: "joined"; you: PartyInfo; other: PartyInfo | null; sheet: Sheet }
+  | {
+      type: "joined"; you: PartyInfo; other: PartyInfo | null; sheet: Sheet;
+      turn_holder: string; floor_open: boolean;
+    }
   | { type: "participant_joined"; party_id: string; name: string; lang: string }
   | { type: "participant_left"; party_id: string; name: string }
   | { type: "note"; final: boolean; from: string; lang: string; text: string }
@@ -62,4 +65,5 @@ export type ServerEvent =
       type: "turn"; speaker: string; speaker_name: string; transcript: string;
       relay_text: string; flagged: string[]; sheet: Sheet; audio_b64: string;
     }
+  | { type: "floor"; holder: string; open: boolean }
   | { type: "error"; text: string };

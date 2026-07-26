@@ -12,6 +12,8 @@ type MeetState = {
   log: LogEntry[];
   muted: boolean;
   speaking: Record<string, boolean>;
+  turnHolder: string | null;
+  floorOpen: boolean;
 
   setStatus: (s: ConnectionStatus) => void;
   setError: (text: string) => void;
@@ -50,6 +52,8 @@ export const useMeetStore = create<MeetState>((set, get) => ({
   log: [],
   muted: false,
   speaking: {},
+  turnHolder: null,
+  floorOpen: false,
 
   setStatus: (status) => set({ status }),
   setError: (errorText) => set({ errorText, status: "error" }),
@@ -58,7 +62,10 @@ export const useMeetStore = create<MeetState>((set, get) => ({
   applyServerEvent: (evt) => {
     switch (evt.type) {
       case "joined":
-        set({ me: evt.you, other: evt.other, sheet: evt.sheet, status: "connected" });
+        set({
+          me: evt.you, other: evt.other, sheet: evt.sheet, status: "connected",
+          turnHolder: evt.turn_holder, floorOpen: evt.floor_open,
+        });
         return;
 
       case "participant_joined":
@@ -97,6 +104,10 @@ export const useMeetStore = create<MeetState>((set, get) => ({
         return;
       }
 
+      case "floor":
+        set({ turnHolder: evt.holder, floorOpen: evt.open });
+        return;
+
       case "error":
         set({ errorText: evt.text });
         return;
@@ -107,5 +118,6 @@ export const useMeetStore = create<MeetState>((set, get) => ({
     set({
       status: "idle", errorText: null, me: null, other: null,
       sheet: null, log: [], muted: false, speaking: {},
+      turnHolder: null, floorOpen: false,
     }),
 }));

@@ -4,6 +4,7 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 export type MeetSocket = {
   sendAudio: (chunk: Int16Array) => void;
+  sendControl: (type: "talk_start" | "talk_done") => void;
   close: () => void;
 };
 
@@ -41,6 +42,9 @@ export function connectMeet(
   return {
     sendAudio(chunk: Int16Array) {
       if (ws.readyState === WebSocket.OPEN) ws.send(chunk.buffer as ArrayBuffer);
+    },
+    sendControl(type) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type }));
     },
     close() {
       ws.close();

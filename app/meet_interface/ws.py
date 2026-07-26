@@ -7,9 +7,17 @@ Each connection opens its own upstream Sarvam STT WebSocket (per-party, per-
 language - `stt_stream.build_ws_url`/`classify` do the heavy lifting and are
 reused untouched). Partial/final transcripts become live captions to BOTH
 sides (translated for the listener, verbatim for the speaker - the second
-costs no extra API call). On VAD turn-end, exactly one `agent.run_turn` call
-(the same one the /turn demo uses) updates the room's Negotiation, and the
-resulting relay sentence is spoken via TTS to the listener only.
+costs no extra API call).
+
+Turn-taking is push-to-talk, not VAD-driven: `Room.turn_holder`/`floor_open`
+(rooms.py) form a strict two-state lock so the two parties can never be
+transcribing at once - one talks, the other physically cannot until the
+first clicks "Done". The client drives it with two JSON control frames,
+"talk_start"/"talk_done"; audio bytes arriving outside an open floor held by
+the sender are silently dropped (defense - the browser shouldn't send them
+either). On "talk_done", exactly one `agent.run_turn` call (the same one the
+/turn demo uses) updates the room's Negotiation, the resulting relay sentence
+is spoken via TTS to the listener only, and the lock flips to them.
 """
 from __future__ import annotations
 
@@ -75,6 +83,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
         "you": {"party_id": me.party_id, "name": me.name, "lang": me.lang},
         "other": {"party_id": other.party_id, "name": other.name, "lang": other.lang} if other else None,
         "sheet": room.negotiation.sheet(),
+        "turn_holder": room.turn_holder, "floor_open": room.floor_open,
     })
     if other is not None:
         await _send(room.code, other.party_id, {
@@ -86,43 +95,74 @@ async def ws_room(client: WebSocket, code: str) -> None:
 
     try:
         async with websockets.connect(url, additional_headers=stt_stream.WS_HEADERS) as up:
+            # Shared with pump_down via closure; reset on every talk_start,
+            # drained on talk_done. A dict (not a bare list rebind) so both
+            # tasks always see the current buffer without `nonlocal` juggling.
+            state = {"buffer": []}
+
             async def pump_up() -> None:
-                """Browser PCM16 frames -> Sarvam STT WS."""
+                """Browser frames -> either Sarvam STT WS (audio, only while
+                this party holds an open floor) or the turn-lock state
+                machine (JSON control frames)."""
                 while True:
-                    chunk = await client.receive_bytes()
-                    await up.send(_json.dumps({
-                        "audio": {"data": base64.b64encode(chunk).decode(), "encoding": "audio/wav"}
-                    }))
+                    msg = await client.receive()
+                    if msg.get("type") == "websocket.disconnect":
+                        raise WebSocketDisconnect(msg.get("code", 1000))
+                    if msg.get("type") != "websocket.receive":
+                        continue
+
+                    raw_bytes = msg.get("bytes")
+                    if raw_bytes is not None:
+                        if room.turn_holder == me.party_id and room.floor_open:
+                            await up.send(_json.dumps({
+                                "audio": {
+                                    "data": base64.b64encode(raw_bytes).decode(),
+                                    "encoding": "audio/wav",
+                                    "sample_rate": 16000,
+                                }
+                            }))
+                        continue
+
+                    raw_text = msg.get("text")
+                    if raw_text is None:
+                        continue
+                    try:
+                        ctrl = _json.loads(raw_text)
+                    except ValueError:
+                        continue
+                    await _handle_control(room, me, ctrl.get("type", ""), state)
 
             async def pump_down() -> None:
-                """Sarvam STT WS -> live captions, and on turn-end, the agent."""
-                buffer: list[str] = []
+                """Sarvam STT WS -> live captions for whoever currently holds
+                the floor. Finals accumulate into `state["buffer"]`; talk_done
+                (not VAD) is what drains it into an agent turn."""
                 async for raw in up:
                     kind, text = stt_stream.classify(_json.loads(raw))
+                    if kind not in ("partial", "final", "error"):
+                        continue  # turn_end (VAD) is ignored - talk_done drives turns now
                     other_now = room.other(me.party_id)
 
-                    if kind in ("partial", "final"):
-                        is_final = kind == "final"
-                        if is_final:
-                            buffer.append(text)
-                        # Speaker sees their own words verbatim - no extra API call.
-                        await _send(room.code, me.party_id, {
-                            "type": "note", "final": is_final,
-                            "from": me.name, "lang": me.lang, "text": text,
-                        })
-                        if other_now is not None:
-                            translated = await _safe_translate(text, other_now.lang, me.lang)
-                            await _send(room.code, other_now.party_id, {
-                                "type": "note", "final": is_final,
-                                "from": me.name, "lang": other_now.lang, "text": translated,
-                            })
-
-                    elif kind == "turn_end" and buffer:
-                        await _finish_turn(room, me.party_id, " ".join(buffer))
-                        buffer = []
-
-                    elif kind == "error":
+                    if kind == "error":
                         await _send(room.code, me.party_id, {"type": "error", "text": text})
+                        continue
+
+                    if room.turn_holder != me.party_id or not room.floor_open:
+                        continue  # stray STT frame after floor closed - drop it
+
+                    is_final = kind == "final"
+                    if is_final:
+                        state["buffer"].append(text)
+                    # Speaker sees their own words verbatim - no extra API call.
+                    await _send(room.code, me.party_id, {
+                        "type": "note", "final": is_final,
+                        "from": me.name, "lang": me.lang, "text": text,
+                    })
+                    if other_now is not None:
+                        translated = await _safe_translate(text, other_now.lang, me.lang)
+                        await _send(room.code, other_now.party_id, {
+                            "type": "note", "final": is_final,
+                            "from": me.name, "lang": other_now.lang, "text": translated,
+                        })
 
             await asyncio.gather(pump_up(), pump_down())
 
@@ -134,15 +174,54 @@ async def ws_room(client: WebSocket, code: str) -> None:
         PANELS.get(room.code, {}).pop(me.party_id, None)
         await rooms.release_slot(room.code, me.party_id)
         remaining = room.other(me.party_id)
+        # A party disconnecting mid-turn must not permanently strand the
+        # lock - hand it to whoever's left so the call can continue.
+        if room.turn_holder == me.party_id:
+            room.floor_open = False
+            if remaining is not None:
+                room.turn_holder = remaining.party_id
         if remaining is not None:
             await _send(room.code, remaining.party_id, {
                 "type": "participant_left", "party_id": me.party_id, "name": me.name,
             })
+            await _send(room.code, remaining.party_id, {
+                "type": "floor", "holder": room.turn_holder, "open": room.floor_open,
+            })
+
+
+async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, state: dict) -> None:
+    if kind == "talk_start":
+        if room.turn_holder != me.party_id:
+            await _send(room.code, me.party_id, {"type": "error", "text": "Not your turn to talk."})
+            return
+        if not room.is_full():
+            await _send(room.code, me.party_id, {"type": "error", "text": "Waiting for the other participant."})
+            return
+        if room.floor_open:
+            return  # already open - duplicate click, ignore
+        room.floor_open = True
+        state["buffer"] = []
+        for pid in room.participants:
+            await _send(room.code, pid, {"type": "floor", "holder": room.turn_holder, "open": True})
+
+    elif kind == "talk_done":
+        if room.turn_holder != me.party_id or not room.floor_open:
+            return
+        room.floor_open = False
+        transcript = " ".join(state["buffer"]).strip()
+        state["buffer"] = []
+        if transcript:
+            await _finish_turn(room, me.party_id, transcript)
+        # Flip the lock regardless of whether anything was said - a party
+        # that clicks Done with nothing captured must not deadlock the call.
+        other = room.other(me.party_id)
+        room.turn_holder = other.party_id if other is not None else me.party_id
+        for pid in room.participants:
+            await _send(room.code, pid, {"type": "floor", "holder": room.turn_holder, "open": False})
 
 
 async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None:
-    """ONE sarvam-30b call per completed turn - never on a partial, matching
-    the rate-budget discipline of the /turn demo and app/agent.py."""
+    """ONE sarvam-30b call per completed turn, triggered by talk_done."""
     other = room.other(party_id)
     idx = len(room.negotiation.turns)
 

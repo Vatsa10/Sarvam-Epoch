@@ -52,6 +52,11 @@ class Room:
     code: str
     negotiation: Negotiation
     participants: dict[str, Participant] = field(default_factory=dict)
+    # Push-to-talk lock: only `turn_holder` may open the floor and stream audio.
+    # `floor_open` is true only between that party's "talk_start" and "talk_done" -
+    # both flip together, so the two parties can never be transcribing at once.
+    turn_holder: str = "p1"
+    floor_open: bool = False
 
     def other(self, party_id: str) -> Participant | None:
         for pid, p in self.participants.items():

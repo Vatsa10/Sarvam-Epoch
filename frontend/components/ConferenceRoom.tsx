@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import JoinScreen from "@/components/JoinScreen";
 import ParticipantBox from "@/components/ParticipantBox";
 import TermSheetPanel from "@/components/TermSheetPanel";
@@ -11,11 +11,19 @@ import { useMeetStore } from "@/lib/store/meetStore";
 
 export default function ConferenceRoom() {
   const [code, setCode] = useState<string | null>(null);
+  // True from the moment "Done" is clicked until the server's "floor" event
+  // confirms the lock flipped - blocks a second click while the turn (agent
+  // call + TTS) is still being processed.
+  const [processing, setProcessing] = useState(false);
   const socketRef = useRef<MeetSocket | null>(null);
   const captureRef = useRef<AudioCapture | null>(null);
 
-  const { status, errorText, me, other, sheet, log, muted, speaking, applyServerEvent, setMuted, reset } =
+  const { status, errorText, me, other, sheet, log, muted, speaking, turnHolder, floorOpen, applyServerEvent, setMuted, reset } =
     useMeetStore();
+
+  useEffect(() => {
+    setProcessing(false);
+  }, [turnHolder]);
 
   const leave = async () => {
     socketRef.current?.close();
@@ -36,17 +44,34 @@ export default function ConferenceRoom() {
     socketRef.current = socket;
 
     try {
-      captureRef.current = await startCapture((chunk) => socket.sendAudio(chunk));
+      // Mic is captured continuously once granted, but chunks are only ever
+      // forwarded while it's genuinely this party's open floor - the
+      // push-to-talk gate lives here, not in when the mic itself runs.
+      captureRef.current = await startCapture((chunk) => {
+        const s = useMeetStore.getState();
+        if (!s.muted && s.me && s.turnHolder === s.me.party_id && s.floorOpen) {
+          socket.sendAudio(chunk);
+        }
+      });
     } catch {
       useMeetStore.getState().setError("Microphone access is required for a translated call.");
     }
   };
 
-  const toggleMute = () => {
-    const next = !muted;
-    setMuted(next);
-    captureRef.current?.setMuted(next);
+  const isMyTurn = !!me && turnHolder === me.party_id;
+
+  const talkStart = () => {
+    if (!isMyTurn || floorOpen || processing) return;
+    socketRef.current?.sendControl("talk_start");
   };
+
+  const talkDone = () => {
+    if (!isMyTurn || !floorOpen) return;
+    setProcessing(true);
+    socketRef.current?.sendControl("talk_done");
+  };
+
+  const toggleMute = () => setMuted(!muted);
 
   if (!code) {
     return <JoinScreen onReady={join} />;
@@ -76,7 +101,19 @@ export default function ConferenceRoom() {
         <TermSheetPanel sheet={sheet} log={log} className="flex-1 min-h-[50vh]" />
       </div>
 
-      <ControlBar code={code} muted={muted} onToggleMute={toggleMute} onLeave={leave} />
+      <ControlBar
+        code={code}
+        muted={muted}
+        onToggleMute={toggleMute}
+        onLeave={leave}
+        isMyTurn={isMyTurn}
+        floorOpen={floorOpen}
+        processing={processing}
+        otherPresent={!!other}
+        otherName={other?.name ?? null}
+        onTalkStart={talkStart}
+        onTalkDone={talkDone}
+      />
     </main>
   );
 }
