@@ -357,7 +357,7 @@ async def listen(mediate: bool = True) -> None:
 
             r = client.speech_to_text.transcribe(
                 file=("turn.wav", to_wav(pcm), "audio/wav"),
-                model="saaras:v3", language_code=me["lang"],
+                model="saaras:v3", language_code=me["lang"], mode="codemix",
             )
             transcript = (getattr(r, "transcript", "") or "").strip()
             if not transcript:
@@ -375,6 +375,15 @@ async def listen(mediate: bool = True) -> None:
             # happened to the sheet.
             relay = (gloss or transcript).strip()
             doubt = next((t.doubt for t in neg.terms.values() if t.doubt), None)
+
+            # A clarification is only meaningful when something on the sheet is
+            # actually ambiguous. When the speaker simply ASKS a question ("what is
+            # the rent for one month?"), nothing was recorded and nothing is in
+            # doubt - the model still tends to emit "are you asking about the rent?",
+            # which we would then put to the OTHER party, interrogating the wrong
+            # person about a question they never heard. Relay it instead.
+            if res.clarification and not res.updates and not doubt:
+                res.clarification = None
 
             if doubt:
                 # A magnitude question goes BACK TO THE SPEAKER, in the speaker's own

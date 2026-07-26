@@ -178,10 +178,12 @@ class Turn:
 
 
 class Negotiation:
-    """Append-only turn log; term sheet is DERIVED by replaying it.
+    """Append-only proposal log with a term sheet folded on top of it.
 
-    Deriving rather than mutating is what makes provenance free: every term can name
-    who said what, when, in which language, and what superseded it.
+    Every proposal is kept forever - `apply` appends before it touches state - so a
+    term can always name who said what, when, in which language, and what superseded
+    it. The Term row itself is updated in place rather than recomputed, so the log is
+    the record and the row is the current view of it.
     """
 
     def __init__(self, session_id: str = "default") -> None:

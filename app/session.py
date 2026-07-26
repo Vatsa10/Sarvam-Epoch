@@ -44,6 +44,10 @@ def load(path: pathlib.Path, session_id: str) -> Negotiation:
                 continue
             term.agreed_value = t.get("agreed_value")
             term.divergence_note = t.get("divergence_note")
+            # doubt must survive too: an unanswered magnitude question is a pending
+            # correction, and losing it across a restart silently re-accepts a
+            # number nobody confirmed.
+            term.doubt = t.get("doubt")
             try:
                 term.proposals = [Proposal(**p) for p in t.get("proposals", [])]
             except (KeyError, TypeError, AttributeError, ValueError):

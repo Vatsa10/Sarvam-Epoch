@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, sarvam, session, stt_stream
+from . import agent, drafter, sarvam, session, stt_stream
 from .mediator import Negotiation, Turn, TermState
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -415,6 +415,17 @@ async def replay(scenario: str) -> JSONResponse:
     ]
     return JSONResponse({"scenario": spec["name"], "expected_ok": not mismatches,
                          "mismatches": mismatches, "sheet": sheet})
+
+
+@app.get("/draft")
+async def draft_agreement(lang: str = "en-IN") -> HTMLResponse:
+    """The lawyer's view. `lang` is the LAWYER's language, which may be a third
+    language neither negotiator speaks.
+
+    Drafts only settled terms; everything blocked becomes an open question instead
+    of a clause."""
+    d = await drafter.draft(NEG, lawyer_lang=lang)
+    return HTMLResponse(drafter.render(d, NEG))
 
 
 @app.post("/reset")
