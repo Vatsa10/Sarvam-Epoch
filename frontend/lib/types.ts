@@ -51,8 +51,11 @@ export type PartyInfo = { party_id: string; name: string; lang: string; out_lang
 export type LogEntry =
   | { kind: "note"; id: string; from: string; lang: string; text: string; final: boolean }
   | {
-      kind: "turn"; id: string; speaker: string; speakerName: string;
+      kind: "turn"; id: string; turnIdx: number; speaker: string; speakerName: string;
       transcript: string; relayText: string; flagged: string[];
+      // true from the moment the text lands until its audio arrives, so the
+      // listener can see "speaking shortly" instead of silence.
+      speaking: boolean;
     };
 
 export type ServerEvent =
@@ -65,8 +68,13 @@ export type ServerEvent =
   | { type: "participant_left"; party_id: string; name: string }
   | { type: "note"; final: boolean; from: string; lang: string; text: string }
   | {
-      type: "turn"; speaker: string; speaker_name: string; transcript: string;
-      relay_text: string; flagged: string[]; sheet: Sheet; audio_b64: string;
+      type: "turn"; turn_idx: number; speaker: string; speaker_name: string;
+      transcript: string; relay_text: string; flagged: string[]; sheet: Sheet;
+      speaking: boolean;
     }
+  // Audio follows its turn as a separate frame - text is not held hostage to TTS.
+  | { type: "audio"; turn_idx: number; audio_b64: string }
   | { type: "floor"; holder: string; open: boolean }
+  | { type: "recover"; text: string }
+  | { type: "resolve"; term: string; text: string }
   | { type: "error"; text: string };

@@ -109,11 +109,27 @@ export const useMeetStore = create<MeetState>((set, get) => ({
           );
           withoutPartials.push({
             kind: "turn", id: `turn-${evt.speaker}-${evt.sheet.turns.length}`,
-            speaker: evt.speaker, speakerName: evt.speaker_name,
+            turnIdx: evt.turn_idx, speaker: evt.speaker, speakerName: evt.speaker_name,
             transcript: evt.transcript, relayText: evt.relay_text, flagged: evt.flagged,
+            speaking: Boolean(evt.speaking),
           });
           return { log: withoutPartials.slice(-MAX_LOG), sheet: evt.sheet };
         });
+        return;
+      }
+
+      // Audio arrives AFTER its turn: the text is rendered the moment the
+      // translation exists, and the voice catches up a beat later. Holding the
+      // turn until Bulbul returns left the listener staring at nothing while the
+      // speaker had visibly stopped talking.
+      case "audio": {
+        set((s) => ({
+          log: s.log.map((e) =>
+            e.kind === "turn" && e.turnIdx === evt.turn_idx
+              ? { ...e, speaking: false }
+              : e
+          ),
+        }));
         playAudio(evt.audio_b64);
         return;
       }
@@ -121,6 +137,20 @@ export const useMeetStore = create<MeetState>((set, get) => ({
       case "floor":
         set({ turnHolder: evt.holder, floorOpen: evt.open });
         return;
+
+      // Recovery and deadlock guidance are not errors - they are the product
+      // telling the user what happened and what to do next, which is the whole
+      // point at the friction moment.
+      case "recover":
+      case "resolve": {
+        set((s) => ({
+          log: [...s.log, {
+            kind: "note" as const, id: `sys-${Date.now()}`, from: "Mediator",
+            lang: "", text: evt.text, final: true,
+          }].slice(-MAX_LOG),
+        }));
+        return;
+      }
 
       case "error":
         set({ errorText: evt.text });

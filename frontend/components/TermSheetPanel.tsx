@@ -137,6 +137,14 @@ export default function TermSheetPanel({
                   <div className="text-[11px] uppercase tracking-wide text-neutral-500">{entry.speakerName}</div>
                   <div className="text-sm text-neutral-200">{entry.transcript}</div>
                   <div className="text-xs text-neutral-400 italic">→ {entry.relayText}</div>
+                  {/* The translation is on screen the instant it exists; Bulbul
+                      takes about a second longer. Saying so beats silence — the
+                      listener knows to wait rather than assuming it is finished. */}
+                  {entry.speaking && (
+                    <div className="text-[11px] text-neutral-500 mt-0.5 animate-pulse">
+                      ◗ speaking…
+                    </div>
+                  )}
                   {entry.flagged.length > 0 && (
                     <div className="text-xs text-red-400 mt-0.5">Flagged: {entry.flagged.join(", ")}</div>
                   )}

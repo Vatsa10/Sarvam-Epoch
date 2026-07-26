@@ -229,10 +229,32 @@ async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, st
         room.floor_open = False
         transcript = " ".join(state["buffer"]).strip()
         state["buffer"] = []
-        if transcript:
-            await _finish_turn(room, me.party_id, transcript)
-        # Flip the lock regardless of whether anything was said - a party
-        # that clicks Done with nothing captured must not deadlock the call.
+
+        if not transcript:
+            # Nothing was captured. Handing the floor to the other party here is
+            # the worst option: this speaker loses their turn, the listener gets
+            # silence, and nobody is told why. Keep the floor, say exactly what
+            # happened and exactly what to do - and lose no negotiated state.
+            room.turn_holder = me.party_id
+            await _send(room.code, me.party_id, {
+                "type": "recover",
+                "text": ("Nothing was picked up that time. Your turn is still open — "
+                         "press Talk, wait a moment, then speak. Nothing agreed so far "
+                         "has been lost."),
+            })
+            other = room.other(me.party_id)
+            if other is not None:
+                await _send(room.code, other.party_id, {
+                    "type": "recover",
+                    "text": (f"{me.name} is still speaking — their audio did not come "
+                             f"through. Nothing has been lost."),
+                })
+            for pid in room.participants:
+                await _send(room.code, pid, {"type": "floor",
+                                             "holder": room.turn_holder, "open": False})
+            return
+
+        await _finish_turn(room, me.party_id, transcript)
         other = room.other(me.party_id)
         room.turn_holder = other.party_id if other is not None else me.party_id
         for pid in room.participants:
@@ -267,7 +289,7 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     # to Bulbul with an Indian target language makes the listener hear English read
     # in a Malayalam voice - translate before speaking.
     spoken = res.clarification or res.summary or gloss
-    audio = ""
+    voice = None
     if spoken and other is not None:
         # The listener hears their OUTPUT language, in that language's Bulbul
         # voice - never the sender's.
@@ -277,18 +299,6 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
                                             mode="formal") or spoken
         except Exception:  # noqa: BLE001
             pass
-        try:
-            # Slower when the sheet just broke or a value is in doubt - a mediator
-            # that flags a divergence at the same clip as a routine relay sounds
-            # like it did not notice.
-            audio = await sarvam.tts(
-                spoken, other.out_lang, voice,
-                pace=sarvam.pace_for(
-                    sensitive=bool(res.flagged or res.clarification),
-                    relaying=not (res.flagged or res.clarification)),
-            )
-        except Exception:  # noqa: BLE001
-            audio = ""
 
     room.negotiation.turns.append(Turn(
         idx=idx, party=party_id, lang=speaker_lang, transcript=transcript,
@@ -303,11 +313,65 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
         "speaker_id": party_id, "speaker_name": speaker_name,
         "lang": speaker_lang, "text": transcript, "ts": time.time(),
     })
+
+    # TEXT FIRST, AUDIO AFTER. Bulbul takes about a second, and holding the whole
+    # turn for it leaves the listener staring at nothing while the speaker has
+    # visibly finished. The reader gets the translation the moment it exists; the
+    # voice catches up. `turn_idx` lets the client match the late audio to the row
+    # it already rendered.
     common = {
-        "type": "turn", "speaker": party_id, "speaker_name": speaker_name,
-        "transcript": transcript, "relay_text": spoken,
-        "flagged": res.flagged, "sheet": sheet,
+        "type": "turn", "turn_idx": idx, "speaker": party_id,
+        "speaker_name": speaker_name, "transcript": transcript,
+        "relay_text": spoken, "flagged": res.flagged, "sheet": sheet,
+        "speaking": bool(spoken and other is not None),
     }
-    if other is not None:
-        await _send(room.code, other.party_id, {**common, "audio_b64": audio})
-    await _send(room.code, party_id, {**common, "audio_b64": ""})
+    for pid in room.participants:
+        await _send(room.code, pid, common)
+
+    # A DEADLOCK IS A MOMENT OF FRICTION, NOT JUST A RED ROW. Flagging a term and
+    # stopping there leaves two people who believe they agreed staring at a colour.
+    # Give each side the same three ordered options, in their own language, so the
+    # call has somewhere to go.
+    if res.flagged:
+        for key in res.flagged[:1]:
+            term = room.negotiation.terms.get(key)
+            if term is None:
+                continue
+            mine = term.latest_by(party_id)
+            theirs = term.latest_by(other.party_id) if other is not None else None
+            opts = (
+                f"You two have not actually agreed on {key}. "
+                f"You said {mine.value if mine else 'nothing yet'}; "
+                f"they said {theirs.value if theirs else 'nothing yet'}. "
+                f"Three ways forward: 1) one of you restates a single number you both "
+                f"repeat back, 2) split the difference and say the exact figure, or "
+                f"3) park {key} and settle the other terms first."
+            )
+            for pid, p_obj in room.participants.items():
+                text = opts
+                if p_obj.out_lang != "en-IN":
+                    try:
+                        text = await sarvam.translate(opts, p_obj.out_lang, "en-IN",
+                                                      mode="formal") or opts
+                    except Exception:  # noqa: BLE001
+                        pass
+                await _send(room.code, pid, {"type": "resolve", "term": key,
+                                             "text": text})
+
+    if spoken and other is not None and voice:
+        try:
+            # Slower when the sheet just broke or a value is in doubt - a mediator
+            # that flags a divergence at the same clip as a routine relay sounds
+            # like it did not notice.
+            audio = await sarvam.tts(
+                spoken, other.out_lang, voice,
+                pace=sarvam.pace_for(
+                    sensitive=bool(res.flagged or res.clarification),
+                    relaying=not (res.flagged or res.clarification)),
+            )
+        except Exception:  # noqa: BLE001
+            audio = ""
+        # Even an empty payload is worth sending: it clears the listener's
+        # "speaking shortly" state instead of leaving it waiting forever.
+        await _send(room.code, other.party_id,
+                    {"type": "audio", "turn_idx": idx, "audio_b64": audio})
