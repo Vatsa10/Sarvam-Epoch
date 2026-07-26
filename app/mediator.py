@@ -25,6 +25,8 @@ class TermState(str, Enum):
     DIVERGED = "DIVERGED"      # both said yes TO DIFFERENT VALUES  <- the mechanic
     HEDGED = "HEDGED"          # "dekhte hain" / soft yes -> NOT agreement
     REJECTED = "REJECTED"
+    PARKED = "PARKED"          # unresolvable for now, deliberately set aside so
+                                # the rest of the call can proceed
 
 
 TERMS = {
@@ -57,6 +59,7 @@ class Term:
     agreed_value: str | None = None
     divergence_note: str | None = None
     doubt: str | None = None   # magnitude question awaiting an answer
+    attempts: int = 0          # rounds that touched this term without settling it
 
     def latest_by(self, party: str) -> Proposal | None:
         for p in reversed(self.proposals):
@@ -268,6 +271,7 @@ class Negotiation:
             if prop.stance == "hedge":
                 term.state = TermState.HEDGED
                 term.agreed_value = None
+                term.attempts += 1
                 needs_interjection.append(key)
 
             elif prop.stance == "reject":
@@ -283,6 +287,7 @@ class Negotiation:
                 term.state = TermState.PROPOSED
                 term.agreed_value = None
                 term.divergence_note = None
+                term.attempts += 1
 
             elif prop.stance == "accept":
                 if prior is None or prior.stance in ("hedge", "reject"):
@@ -294,6 +299,7 @@ class Negotiation:
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value
                     term.divergence_note = None
+                    term.attempts = 0
                 elif _both_plain_numbers(prior.value, prop.value):
                     # Two explicit, different NUMBERS is haggling, not divergence -
                     # whatever stance the model picked. Nobody says "I agree" to
@@ -316,6 +322,7 @@ class Negotiation:
                         f"{other} said '{prior.value}' ({prior.verbatim}); "
                         f"{party} accepted as '{prop.value}' ({prop.verbatim})"
                     )
+                    term.attempts += 1
                     needs_interjection.append(key)
 
             else:  # propose
@@ -382,6 +389,33 @@ class Negotiation:
             return False
         return _both_plain_numbers(a.value, b.value) and not _same(a.value, b.value)
 
+    def park(self, key: str, reason: str) -> bool:
+        """Set a term aside instead of letting it stall the call forever.
+
+        Refuses an already-AGREED term - parking is for giving up on a fight, never
+        for undoing a settled one. `apply()` overwrites `state` unconditionally on
+        the next propose/counter/accept/hedge, so a parked term un-parks the moment
+        anyone brings it up again - no special-casing needed here.
+        """
+        term = self.terms.get(key)
+        if term is None or term.state == TermState.AGREED:
+            return False
+        term.state = TermState.PARKED
+        term.agreed_value = None
+        term.divergence_note = reason
+        return True
+
+    def deadlocked(self, key: str, cap: int = 3) -> bool:
+        """True once a term has burned `cap` failed rounds without settling.
+
+        This is the signal the relay uses to decide to park rather than keep
+        looping two people through the same disagreement.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        return term.attempts >= cap and term.state != TermState.AGREED
+
     def transcript_history(self, limit: int = 6) -> str:
         """Recent turns, each attributed to a named speaker.
 
@@ -419,13 +453,15 @@ class Negotiation:
                     "agreed_value": t.agreed_value,
                     "divergence_note": t.divergence_note,
                     "doubt": t.doubt,
+                    "attempts": t.attempts,
                     "proposals": [asdict(p) for p in t.proposals],
                 }
                 for t in self.terms.values()
             ],
             "turns": [asdict(x) for x in self.turns],
             "blocked": [t.key for t in self.terms.values()
-                        if t.state in (TermState.DIVERGED, TermState.HEDGED)],
+                        if t.state in (TermState.DIVERGED, TermState.HEDGED,
+                                       TermState.PARKED)],
         }
 
 

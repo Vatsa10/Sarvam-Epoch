@@ -353,6 +353,81 @@ def test_scaling_doubt_names_the_spoken_number_not_the_assumption():
     assert "17000" in d, f"should name the assumption: {d}"
 
 
+def test_attempts_increments_on_a_failed_round():
+    """A counter that neither settles nor errors still burned a round."""
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 0)
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "chaud hajaar", "stance": "counter"}], 1)
+    assert n.terms["rent"].attempts == 1
+
+
+def test_attempts_resets_on_agreed():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 0)
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "chaud hajaar", "stance": "counter"}], 1)
+    assert n.terms["rent"].attempts == 1
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "sari", "stance": "accept"}], 2)
+    assert n.terms["rent"].state is TermState.AGREED
+    assert n.terms["rent"].attempts == 0
+
+
+def test_park_refuses_an_agreed_term():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    assert n.park("rent", "give up") is False
+    assert n.terms["rent"].state is TermState.AGREED
+
+
+def test_parked_term_unparks_on_a_new_proposal():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 0)
+    assert n.park("rent", "stuck") is True
+    assert n.terms["rent"].state is TermState.PARKED
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "chaud hajaar", "stance": "counter"}], 1)
+    assert n.terms["rent"].state is not TermState.PARKED
+    assert n.terms["rent"].state is TermState.PROPOSED
+
+
+def test_deadlocked_fires_at_the_cap():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "x", "stance": "propose"}], 0)
+    for i in range(1, 4):
+        party = "vatsa" if i % 2 else "sreedev"
+        n.apply(party, "gu-IN", [{"term": "rent", "value": f"{17000 - i}",
+                "verbatim": "y", "stance": "counter"}], i)
+    assert n.terms["rent"].attempts >= 3
+    assert n.deadlocked("rent", cap=3) is True
+    assert n.deadlocked("rent", cap=10) is False
+
+
+def test_sheet_lists_parked_under_blocked():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "x", "stance": "propose"}], 0)
+    n.park("rent", "stuck")
+    s = n.sheet()
+    assert "rent" in s["blocked"]
+    assert s["drafting_safe"] is False
+    assert s["terms"][0]["attempts"] == n.terms["rent"].attempts
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):
