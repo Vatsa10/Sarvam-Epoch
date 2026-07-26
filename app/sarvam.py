@@ -97,6 +97,26 @@ async def chat(system: str, user: str, temperature: float = 0.1) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
+async def chat_tools(system: str, user: str, tools: list[dict],
+                     temperature: float = 0.1) -> dict:
+    """Tool-calling chat. Returns the raw assistant message dict so the caller can
+    read both `tool_calls` and `content`."""
+    r = await _client.post(
+        CHAT_URL,
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={
+            "model": CHAT_MODEL,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": temperature,
+        },
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]
+
+
 async def translate(text: str, target_language_code: str,
                     source_language_code: str = "auto") -> str:
     """Live-notes path. Deliberately uses /translate, not the chat model: it is a
