@@ -97,5 +97,27 @@ async def chat(system: str, user: str, temperature: float = 0.1) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
+async def translate(text: str, target_language_code: str,
+                    source_language_code: str = "auto") -> str:
+    """Live-notes path. Deliberately uses /translate, not the chat model: it is a
+    separate 60/min quota bucket, so partials never eat the 40/min sarvam-30b budget.
+
+    mayura:v1 caps at 1000 chars; a single VAD segment is far below that.
+    """
+    r = await _client.post(
+        TRANSLATE_URL,
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={
+            "input": text[:1000],
+            "source_language_code": source_language_code,
+            "target_language_code": target_language_code,
+            "model": "mayura:v1",
+            "mode": "code-mixed",
+        },
+    )
+    r.raise_for_status()
+    return r.json().get("translated_text", "")
+
+
 async def aclose() -> None:
     await _client.aclose()
