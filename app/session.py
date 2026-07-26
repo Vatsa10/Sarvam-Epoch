@@ -27,11 +27,22 @@ def load(path: pathlib.Path, session_id: str) -> Negotiation:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return neg
+    apply_snapshot(neg, data)
+    return neg
 
+
+def apply_snapshot(neg: Negotiation, data: dict) -> None:
+    """Fold a previously-saved `sheet()` dict back into `neg`, in place.
+
+    Shared by the file-based `load()` above and by any other snapshot store
+    (e.g. a DB row) that hands back the same JSON shape - corrupt or
+    wrong-shaped pieces are skipped rather than raised, same guarantee as
+    `load()`: a bad snapshot degrades to a fresh negotiation, it never crashes.
+    """
     try:
         terms_list = data.get("terms", [])
         if not isinstance(terms_list, list):
-            return neg
+            return
         for t in terms_list:
             if not isinstance(t, dict):
                 continue
@@ -67,5 +78,3 @@ def load(path: pathlib.Path, session_id: str) -> Negotiation:
             neg.turns = turns
     except (KeyError, TypeError, AttributeError, ValueError):
         pass
-
-    return neg

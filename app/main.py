@@ -1,9 +1,13 @@
-"""FastAPI app: one turn endpoint, the term sheet, the lawyer packet.
+"""FastAPI app: the real-time cross-language negotiation mediator, plus the real-time meet.
 
 Flow per turn:
   audio -> Saaras STT -> extract terms -> fold into sheet -> either RELAY to the other
   party or INTERJECT if the sheet went DIVERGED/HEDGED -> Bulbul TTS in the listener's
-  language.
+  language. The mediator UI is served at /mediator.
+
+Room lifecycle, language list, and the live WebSocket relay for the video meet live
+under app/meet_interface/ (mounted at /api/meet/*); the Next.js meet UI is served
+as a static export at /meet.
 """
 from __future__ import annotations
 
@@ -16,23 +20,52 @@ from typing import Any
 
 import websockets
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import agent, drafter, sarvam, session, stt_stream
 from .mediator import Negotiation, Turn, TermState
+from .meet_interface import db as meet_db
+from .meet_interface.app import router as meet_router
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 SESSIONS = ROOT / "sessions"
 SESSIONS.mkdir(exist_ok=True)
+MEET_STATIC = ROOT / "frontend" / "out"
 
 app = FastAPI(title="NyayBandhan")
+app.include_router(meet_router, prefix="/api")
+
+# The Next.js meet UI runs on :3000 in dev (npm run dev) against this API on
+# :8000 - the only cross-origin case in the app, since the built static
+# export is normally served by this same process at /meet. Regex (not a
+# fixed list) because "localhost" and "127.0.0.1" are different origins to
+# the browser, and dev falls back to :3001+ if :3000 is already taken.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ponytail: one in-memory negotiation + a JSON snapshot on every turn. That IS the
 # persistence story - it survives a server restart on stage, which is the only
 # durability the demo has to prove. A DB buys nothing before then.
 NEG = Negotiation()
+
+
+@app.on_event("startup")
+async def _meet_db_startup() -> None:
+    if meet_db.DATABASE_URL:
+        await meet_db.get_pool()
+
+
+@app.on_event("shutdown")
+async def _meet_db_shutdown() -> None:
+    await meet_db.close_pool()
 
 
 def _persist() -> None:
@@ -46,6 +79,11 @@ def _restore() -> None:
 
 
 _restore()
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/meet/")
 
 PANELS: dict[str, set[WebSocket]] = {"vatsa": set(), "sreedev": set()}
 
@@ -496,4 +534,16 @@ async def reset() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-app.mount("/", StaticFiles(directory=str(STATIC), html=True), name="static")
+if MEET_STATIC.exists():
+    @app.get("/meet", include_in_schema=False)
+    async def meet_redirect() -> RedirectResponse:
+        # StaticFiles only mounts on the "/meet/..." prefix - the bare path
+        # (no trailing slash) otherwise 404s instead of serving the meet UI.
+        return RedirectResponse(url="/meet/")
+
+    app.mount("/meet", StaticFiles(directory=str(MEET_STATIC), html=True), name="meet")
+else:
+    print(f"[meet_interface] {MEET_STATIC} not built yet - run `npm run build` in frontend/ "
+          "to serve the meet UI at /meet")
+
+app.mount("/mediator", StaticFiles(directory=str(STATIC), html=True), name="static")
