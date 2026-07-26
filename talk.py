@@ -1,0 +1,272 @@
+"""Terminal harness. Speak into your mic, see it transcribed and translated.
+
+    python talk.py                 # batch: record -> Saaras -> translate
+    python talk.py --stream        # live: partial transcripts + VAD signals
+    python talk.py --mediate       # full pipeline: also run the agent, print the term sheet
+    python talk.py --list-devices  # find your mic if the default is wrong
+
+This exists because no browser has run the capture path yet. It proves Saaras on
+real Gujarati/Malayalam mic input, and --mediate proves the whole product without
+a browser or a second person.
+
+Uses the official `sarvamai` SDK rather than raw HTTP, so the VAD/barge-in knobs
+below are the documented ones.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import io
+import sys
+import wave
+
+import numpy as np
+import sounddevice as sd
+from dotenv import load_dotenv
+
+# Windows consoles default to cp1252, which cannot encode Devanagari/Gujarati/
+# Malayalam and raises UnicodeEncodeError on the first transcript. Displaying
+# Indic script is the entire point of this tool, so force UTF-8 before anything
+# prints. Also run `chcp 65001` if your terminal still shows boxes.
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+load_dotenv()
+
+import os
+
+from sarvamai import AsyncSarvamAI, SarvamAI
+
+KEY = os.getenv("SARVAM_API_KEY", "")
+RATE = 16000          # Saaras streaming wants 16k; matches the browser AudioWorklet
+CHUNK = 1600          # 100ms
+
+LANGS = {
+    "1": ("gu-IN", "Gujarati"),
+    "2": ("ml-IN", "Malayalam"),
+    "3": ("hi-IN", "Hindi"),
+    "4": ("en-IN", "English"),
+    "5": ("ta-IN", "Tamil"),
+    "6": ("mr-IN", "Marathi"),
+    "7": ("kn-IN", "Kannada"),
+    "8": ("bn-IN", "Bengali"),
+}
+
+# Documented VAD knobs on the streaming socket. high_vad_sensitivity is the one
+# that matters in a loud room; interrupt_min_speech_frames is barge-in - how much
+# speech must land before an in-progress agent turn is treated as interrupted.
+VAD = {
+    "high_vad_sensitivity": "true",
+    "vad_signals": "true",
+    "interrupt_min_speech_frames": "8",
+}
+
+
+def pick(prompt: str, default: str) -> tuple[str, str]:
+    print(f"\n{prompt}")
+    for k, (code, name) in LANGS.items():
+        print(f"  {k}. {name:12} ({code})")
+    choice = input(f"  choice [{default}]: ").strip() or default
+    return LANGS.get(choice, LANGS[default])
+
+
+def to_wav(pcm: np.ndarray) -> bytes:
+    """int16 mono -> WAV bytes. The SDK's transcribe() wants a real container."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+def record() -> np.ndarray:
+    """Record until Enter. Simple and predictable - no local VAD guesswork."""
+    frames: list[np.ndarray] = []
+    peak = 0.0
+
+    def cb(indata, _frames, _time, status):
+        nonlocal peak
+        if status:
+            print(f"  (audio status: {status})", file=sys.stderr)
+        frames.append(indata.copy())
+        peak = max(peak, float(np.abs(indata).max()) / 32768.0)
+
+    with sd.InputStream(samplerate=RATE, channels=1, dtype="int16",
+                        blocksize=CHUNK, callback=cb):
+        input("  ● recording — press Enter to stop: ")
+
+    if not frames:
+        return np.zeros(0, dtype=np.int16)
+    pcm = np.concatenate(frames).flatten()
+    secs = len(pcm) / RATE
+    print(f"  captured {secs:.1f}s, peak level {peak:.0%}")
+    if peak < 0.02:
+        print("  ⚠ almost silent — wrong mic? try --list-devices")
+    return pcm
+
+
+async def batch(src_code: str, src_name: str, dst_code: str, dst_name: str, mediate: bool) -> None:
+    # One event loop for the whole session. app.sarvam holds a module-level
+    # httpx.AsyncClient bound to the loop that first touches it, so an
+    # asyncio.run() per turn would close that loop and every later call would fail.
+    client = SarvamAI(api_subscription_key=KEY)
+
+    neg = party = None
+    if mediate:
+        from app.mediator import Negotiation
+        neg = Negotiation("terminal")
+        party = "vatsa"
+
+    print(f"\n{src_name} → {dst_name}. Ctrl+C to quit.\n")
+    while True:
+        try:
+            pcm = record()
+            if pcm.size < RATE // 4:
+                print("  too short, try again\n")
+                continue
+
+            r = client.speech_to_text.transcribe(
+                file=("turn.wav", to_wav(pcm), "audio/wav"),
+                model="saaras:v3",
+                language_code=src_code,
+            )
+            transcript = (getattr(r, "transcript", "") or "").strip()
+            if not transcript:
+                print("  ✗ empty transcript\n")
+                continue
+            print(f"\n  heard  ({src_name}): {transcript}")
+
+            t = client.text.translate(
+                input=transcript,
+                source_language_code=src_code,
+                target_language_code=dst_code,
+                model="mayura:v1",
+                mode="code-mixed",
+            )
+            print(f"  means  ({dst_name}): {getattr(t, 'translated_text', '')}")
+
+            if mediate:
+                await _mediate(neg, party, src_code, transcript,
+                               getattr(t, "translated_text", "") or None)
+                party = "sreedev" if party == "vatsa" else "vatsa"
+                who = "Vatsa (Gujarati)" if party == "vatsa" else "Sreedev (Malayalam)"
+                print(f"\n  next turn: {who}")
+            print()
+        except KeyboardInterrupt:
+            print("\nbye\n")
+            return
+
+
+async def _mediate(neg, party: str, lang: str, transcript: str,
+                   gloss: str | None = None) -> None:
+    """Run the real agent and print the term sheet. This is the product.
+
+    `gloss` is the English translation we already fetched for display - reusing it
+    saves a call AND is what stops the model guessing at Indic numerals.
+    """
+    from app import agent
+    res = await agent.run_turn(neg, party, lang, transcript, len(neg.turns), gloss=gloss)
+    from app.mediator import Turn
+    neg.turns.append(Turn(idx=len(neg.turns), party=party, lang=lang,
+                          transcript=transcript, relay_text=res.summary,
+                          interjection=res.clarification))
+
+    print(f"  agent  : {res.summary}")
+    if res.clarification:
+        print(f"  ASKS   : {res.clarification}")
+
+    sheet = neg.sheet()
+    mark = {"AGREED": "✓", "DIVERGED": "✗", "HEDGED": "~", "PROPOSED": "·",
+            "REJECTED": "✗", "OPEN": " "}
+    print("\n  ── term sheet ──")
+    for t in sheet["terms"]:
+        if t["state"] == "OPEN":
+            continue
+        print(f"   {mark.get(t['state'],' ')} {t['key']:14} {t['state']:9} {t['agreed_value'] or ''}")
+        if t["divergence_note"]:
+            print(f"       ! {t['divergence_note']}")
+    if sheet["blocked"]:
+        print(f"   BLOCKED: {', '.join(sheet['blocked'])} — will not draft")
+    elif sheet["drafting_safe"]:
+        print("   safe to draft")
+
+
+async def stream(src_code: str, src_name: str) -> None:
+    """Live partials + VAD signals straight off the streaming socket."""
+    client = AsyncSarvamAI(api_subscription_key=KEY)
+    q: asyncio.Queue[bytes] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def cb(indata, _f, _t, status):
+        if status:
+            print(f"  (audio status: {status})", file=sys.stderr)
+        loop.call_soon_threadsafe(q.put_nowait, bytes(indata))
+
+    print(f"\n  ● streaming {src_name} — speak, Ctrl+C to stop\n")
+    async with client.speech_to_text_streaming.connect(
+        language_code=src_code, model="saaras:v3", mode="codemix",
+        sample_rate=str(RATE), input_audio_codec="pcm_s16le", **VAD,
+    ) as sock:
+
+        async def send() -> None:
+            while True:
+                await sock.transcribe(audio=await q.get())
+
+        async def recv() -> None:
+            async for msg in sock:
+                d = getattr(msg, "data", None) or {}
+                text = (getattr(d, "transcript", None)
+                        or (d.get("transcript") if isinstance(d, dict) else "") or "")
+                kind = getattr(msg, "type", "")
+                if kind == "events":
+                    sig = (d.get("signal_type") if isinstance(d, dict)
+                           else getattr(d, "signal_type", "")) or ""
+                    print(f"  [VAD] {sig}")
+                elif text.strip():
+                    final = (d.get("is_final") if isinstance(d, dict)
+                             else getattr(d, "is_final", False))
+                    print(f"  {'▸' if final else '·'} {text.strip()}")
+
+        with sd.InputStream(samplerate=RATE, channels=1, dtype="int16",
+                            blocksize=CHUNK, callback=cb):
+            await asyncio.gather(send(), recv())
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stream", action="store_true", help="live partials + VAD signals")
+    ap.add_argument("--mediate", action="store_true", help="also run the agent and print the term sheet")
+    ap.add_argument("--list-devices", action="store_true")
+    a = ap.parse_args()
+
+    if a.list_devices:
+        print(sd.query_devices())
+        return 0
+    if not KEY:
+        print("SARVAM_API_KEY not set — check .env")
+        return 1
+
+    src_code, src_name = pick("You speak:", "1")
+    if a.stream:
+        try:
+            asyncio.run(stream(src_code, src_name))
+        except KeyboardInterrupt:
+            print("\nbye\n")
+        return 0
+
+    dst_code, dst_name = pick("Show it in:", "4")
+    try:
+        asyncio.run(batch(src_code, src_name, dst_code, dst_name, a.mediate))
+    except KeyboardInterrupt:
+        print("\nbye\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
