@@ -23,7 +23,12 @@ TOOLS = [
                       "amounts. For maintenance distinguish 'fixed 500' from 'actual'."},
             "verbatim": {"type": "string", "description":
                          "Their exact words for this term, original script, unedited."},
-            "stance": {"type": "string", "enum": ["propose", "accept", "reject", "hedge"]},
+            "stance": {"type": "string",
+                       "enum": ["propose", "counter", "accept", "reject", "hedge"],
+                       "description":
+                       "counter = they reject the number on the table and name a "
+                       "different one ('17 is too much, I'll give 14'). That is open "
+                       "haggling, NOT agreement and NOT divergence."},
         }, "required": ["term", "value", "verbatim", "stance"]}}},
     {"type": "function", "function": {
         "name": "flag_divergence",
@@ -60,6 +65,33 @@ detecting that is your entire job. Do not smooth it over.
 
 A hedge ("we'll see", "dekhte hain", "nokkaam", "joiye chhe") is NOT an accept. Never
 upgrade a hedge.
+
+COUNTER-OFFER vs DIVERGENCE — do not confuse these, they are opposites:
+- `counter` is OPEN disagreement. The speaker rejects the number on the table and names
+  a different one: "seventeen is too much, I can give you fourteen". Both sides know
+  they disagree. This is ordinary haggling. Use `counter`. NEVER call flag_divergence.
+- DIVERGENCE is HIDDEN disagreement. Both sides believe they agreed, but meant different
+  things: one says "maintenance separate" meaning actual cost, the other agrees meaning a
+  fixed 500. Nobody realises. THAT is what flag_divergence is for.
+If the speaker voices any objection to the other party's number, it is `counter`.
+A counter-offer needs no clarifying question — the speaker was perfectly clear. Do not
+ask them to confirm a number they just stated explicitly ("fourteen thousand" needs no
+"did you mean fourteen thousand?"). Asking about something unambiguous makes the system
+look deaf, and you only get one question per turn — spend it where it is needed.
+
+A QUESTION IS NOT A PROPOSAL. "What is the rent?" / "How long is the lease?" asks for
+a value, it does not offer one. Call NO tool at all for a pure question — no
+update_term, and NO request_clarification either. A clear question is not ambiguous;
+it just needs passing to the other party. Asking "are you asking about the rent?"
+puts the question to the wrong person and wastes the turn. Only call update_term when
+the speaker states a position, and only call request_clarification when a value
+already on the table is genuinely unclear.
+
+AMOUNTS AND MAGNITUDE. People state rent in shorthand: "seventeen" means seventeen
+thousand, not seventeen rupees. If a stated amount would be absurd taken literally — a
+monthly rent of 17, a deposit of 50 — do NOT record it. Call request_clarification and
+ask which magnitude they mean ("seventeen thousand, or seventeen hundred?"). Recording a
+nonsense number is worse than asking, because it silently becomes a contract clause.
 
 Then write a one-sentence plain-English summary of what the speaker said.
 
@@ -148,7 +180,21 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
         res.flagged.extend(neg.apply(party, lang, updates, turn_idx))
         res.updates = updates
 
+    # A counter-offer can never be a divergence, and the prompt saying so is not
+    # enough - observed live, the model countered 14000 against 17000 AND called
+    # flag_divergence on the same turn, and since flags apply last it overwrote
+    # PROPOSED back to DIVERGED. Divergence means both sides think they agreed;
+    # someone who just said "that is too much" plainly does not. Enforce it here,
+    # where a prompt cannot be ignored.
+    countered = {u.get("term") for u in updates if u.get("stance") == "counter"}
+
     for key, note in flags:
+        # Two ways the model gets this wrong, both seen live: it labels the
+        # counter-offer `counter` and flags it anyway, or it labels it `accept` with
+        # a different number and flags that. is_open_haggle catches the second by
+        # looking at the figures themselves rather than at the label.
+        if key in countered or neg.is_open_haggle(key):
+            continue
         t = neg.terms.get(key)
         if t is not None and t.proposals:
             # Defensive, not authoritative: only escalate a term that already

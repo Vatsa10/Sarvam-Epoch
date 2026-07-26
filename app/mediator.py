@@ -56,12 +56,114 @@ class Term:
     proposals: list[Proposal] = field(default_factory=list)
     agreed_value: str | None = None
     divergence_note: str | None = None
+    doubt: str | None = None   # magnitude question awaiting an answer
 
     def latest_by(self, party: str) -> Proposal | None:
         for p in reversed(self.proposals):
             if p.party == party:
                 return p
         return None
+
+
+# Plausible monthly rupee ranges. A stated amount far below the floor is almost
+# never literal - people say "seventeen" and mean seventeen thousand. Recording
+# rent = 17 is not a small error, it is a nonsense contract, so the system must
+# ask before it writes anything down.
+#
+# These are TUNABLE WITHOUT EDITING CODE: drop a plausible.json next to this repo
+# (or point PLAUSIBLE_JSON at one) shaped {"rent": [1500, 1000000], ...}. Editing
+# Python between demo runs is how you ship a syntax error to a projector.
+_DEFAULT_PLAUSIBLE: dict[str, tuple[int, int]] = {
+    "rent":        (1500, 1_000_000),
+    "deposit":     (3000, 5_000_000),
+    "maintenance": (100, 200_000),
+}
+
+
+def _load_plausible() -> dict[str, tuple[int, int]]:
+    import os
+    import pathlib
+
+    path = pathlib.Path(os.getenv(
+        "PLAUSIBLE_JSON",
+        pathlib.Path(__file__).resolve().parent.parent / "plausible.json"))
+    ranges = dict(_DEFAULT_PLAUSIBLE)
+    if not path.exists():
+        return ranges
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for key, pair in raw.items():
+            lo, hi = int(pair[0]), int(pair[1])
+            if lo > 0 and hi > lo:
+                ranges[key] = (lo, hi)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError, KeyError, IndexError):
+        # A malformed override must never take the app down mid-demo - fall back
+        # to the built-in ranges and carry on.
+        return dict(_DEFAULT_PLAUSIBLE)
+    return ranges
+
+
+PLAUSIBLE = _load_plausible()
+
+# Below this, a bare number is read as spoken shorthand ("seventeen" = 17000).
+# At or above it, the figure is taken literally even if it is under the floor.
+SHORTHAND_MAX = 100
+
+
+def magnitude_doubt(term_key: str, value: str) -> str | None:
+    """Return a suggested reading when a bare number is implausibly small.
+
+    "17" for rent -> "17000".
+
+    Returns None - i.e. trust the value as stated - when it is non-numeric, has no
+    configured range, or CARRIES ANY WORDS. That last rule is deliberate and load
+    bearing: "fixed 500" and "actual" are real, meaningful answers for maintenance,
+    and the difference between them is exactly the divergence this product exists to
+    catch. Second-guessing a value with words attached would destroy that signal to
+    fix a problem it does not have.
+    """
+    lo, _hi = PLAUSIBLE.get(term_key, (None, None))
+    if lo is None:
+        return None
+    alnum = "".join(ch for ch in value if ch.isalnum())
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits or digits != alnum:
+        return None                      # words attached (or nothing) - trust it
+    n = int(digits)
+    if n <= 0 or n >= lo:
+        return None
+
+    # Only SPOKEN-SHORTHAND numbers get corrected. "seventeen" (17) obviously means
+    # seventeen thousand. But 1400 is just a low rent, and blindly scaling it would
+    # propose 1,400,000 - turning a slightly-odd figure into an absurd one. Anything
+    # at or above SHORTHAND_MAX is taken as stated.
+    if n >= SHORTHAND_MAX:
+        return None
+    return str(n * 1000)
+
+
+def scaled_without_asking(term_key: str, verbatim: str, value: str) -> str | None:
+    """Catch the model quietly upgrading a shorthand instead of asking about it.
+
+    The speaker said "17"; the model wrote 17000. That is probably right, but it is
+    still a GUESS about money, and 17 could equally have meant 1700. Whether the
+    model asks is not reliably steerable by prompt - observed asking on one run and
+    silently normalising the identical utterance on the next - so the confirmation
+    is enforced here instead.
+
+    Returns the value the model assumed, so the question can name it.
+    """
+    if term_key not in PLAUSIBLE:
+        return None
+    spoken = "".join(ch for ch in verbatim if ch.isdigit())
+    written = "".join(ch for ch in value if ch.isdigit())
+    if not spoken or not written or spoken == written:
+        return None
+    if int(spoken) >= SHORTHAND_MAX:
+        return None                      # not shorthand; some other rewrite
+    if not written.startswith(spoken):
+        return None                      # unrelated number, not a scaling
+    return value
 
 
 @dataclass
@@ -76,10 +178,12 @@ class Turn:
 
 
 class Negotiation:
-    """Append-only turn log; term sheet is DERIVED by replaying it.
+    """Append-only proposal log with a term sheet folded on top of it.
 
-    Deriving rather than mutating is what makes provenance free: every term can name
-    who said what, when, in which language, and what superseded it.
+    Every proposal is kept forever - `apply` appends before it touches state - so a
+    term can always name who said what, when, in which language, and what superseded
+    it. The Term row itself is updated in place rather than recomputed, so the log is
+    the record and the row is the current view of it.
     """
 
     def __init__(self, session_id: str = "default",
@@ -104,6 +208,14 @@ class Negotiation:
             key = u.get("term")
             if key not in self.terms:
                 continue
+
+            # A QUESTION IS NOT A PROPOSAL. "What is the rent?" names no value, and
+            # a term update carrying no value would otherwise land as a PROPOSED row
+            # with a blank amount - a phantom position nobody actually took, which
+            # then contaminates every later comparison. Drop it.
+            if not str(u.get("value", "")).strip():
+                continue
+
             term = self.terms[key]
             other = self._other_party(party)
             prior = term.latest_by(other)
@@ -118,6 +230,35 @@ class Negotiation:
             )
             term.proposals.append(prop)
 
+            # Before anything is recorded: is this number even possible? "17" for a
+            # monthly rent is not a cheap flat, it is a misheard "seventeen thousand".
+            if prop.stance in ("propose", "counter", "accept"):
+                likely = magnitude_doubt(key, prop.value)
+                assumed = None if likely else scaled_without_asking(
+                    key, prop.verbatim, prop.value)
+                if likely or assumed:
+                    # Two different doubts, and they must not share wording. When the
+                    # raw value is implausible, quote what they said. When the model
+                    # silently scaled it, quote the SPOKEN number and name the
+                    # assumption - otherwise the question reads "you said 17000, did
+                    # you mean 17000?", which is gibberish.
+                    if likely:
+                        term.doubt = (
+                            f"{party} said '{prop.value}' for {key} — implausibly "
+                            f"low. Confirm whether they mean {likely}."
+                        )
+                    else:
+                        spoken = "".join(c for c in prop.verbatim if c.isdigit())
+                        term.doubt = (
+                            f"{party} only said '{spoken}' for {key}; it was read as "
+                            f"{assumed}. Confirm that, or the other reading."
+                        )
+                    term.state = TermState.PROPOSED
+                    term.agreed_value = None
+                    needs_interjection.append(key)
+                    continue
+                term.doubt = None
+
             if prop.stance == "hedge":
                 term.state = TermState.HEDGED
                 term.agreed_value = None
@@ -125,6 +266,15 @@ class Negotiation:
 
             elif prop.stance == "reject":
                 term.state = TermState.REJECTED
+                term.agreed_value = None
+                term.divergence_note = None
+
+            elif prop.stance == "counter":
+                # Explicit haggling: "17 is too much, I'll give you 14". Both sides
+                # KNOW they disagree, so this is emphatically NOT divergence -
+                # divergence is a HIDDEN disagreement where both said yes. Treating
+                # a counter-offer as DIVERGED empties the word of meaning.
+                term.state = TermState.PROPOSED
                 term.agreed_value = None
                 term.divergence_note = None
 
@@ -137,6 +287,20 @@ class Negotiation:
                 elif _same(prior.value, prop.value):
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value
+                    term.divergence_note = None
+                elif _both_plain_numbers(prior.value, prop.value):
+                    # Two explicit, different NUMBERS is haggling, not divergence -
+                    # whatever stance the model picked. Nobody says "I agree" to
+                    # 17000 while meaning 14000; stating your own figure IS the
+                    # disagreement, and both sides can see it.
+                    #
+                    # Divergence needs the values to be describable the same way
+                    # while meaning different things ("separate" = actual cost vs a
+                    # fixed 500). That case survives because those are not both
+                    # plain numbers. This is the guard that holds when the model
+                    # labels a counter-offer as `accept`, which it does.
+                    term.state = TermState.PROPOSED
+                    term.agreed_value = None
                     term.divergence_note = None
                 else:
                     # BOTH SAID YES. TO DIFFERENT THINGS. This is the whole product.
@@ -157,6 +321,23 @@ class Negotiation:
                 term.divergence_note = None
 
         return needs_interjection
+
+    def is_open_haggle(self, key: str) -> bool:
+        """True when the two sides' latest figures are both bare numbers that differ.
+
+        That is visible disagreement, so it can never be a hidden divergence - and
+        the model cannot be trusted to keep the two apart. It has labelled a
+        counter-offer `accept`, and separately called flag_divergence on one, so
+        both the state machine and the tool dispatcher check this.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        ids = list(sarvam.PARTIES)
+        a, b = (term.latest_by(p) for p in ids)
+        if a is None or b is None:
+            return False
+        return _both_plain_numbers(a.value, b.value) and not _same(a.value, b.value)
 
     def transcript_history(self, limit: int = 6) -> str:
         """Recent turns, each attributed to a named speaker.
@@ -194,6 +375,7 @@ class Negotiation:
                     "state": t.state.value,
                     "agreed_value": t.agreed_value,
                     "divergence_note": t.divergence_note,
+                    "doubt": t.doubt,
                     "proposals": [asdict(p) for p in t.proposals],
                 }
                 for t in self.terms.values()
@@ -217,6 +399,19 @@ def _same(a: str, b: str) -> bool:
 
 
 _NOISE = ("rupees", "rupee", "inr", "rs", "permonth", "monthly", "months", "month", "days", "day")
+
+
+def _both_plain_numbers(a: str, b: str) -> bool:
+    """True when both values are bare figures with no qualifying words.
+
+    "17000" and "14000" -> True (open haggling).
+    "actual" and "fixed 500" -> False (the words carry the disagreement, and that
+    is where hidden divergence lives).
+    """
+    def plain(v: str) -> bool:
+        alnum = "".join(c for c in v if c.isalnum())
+        return bool(alnum) and alnum.isdigit()
+    return plain(a) and plain(b)
 
 
 def _norm(s: str) -> str:

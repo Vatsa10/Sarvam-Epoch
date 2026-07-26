@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, sarvam, session, stt_stream
+from . import agent, drafter, sarvam, session, stt_stream
 from .mediator import Negotiation, Turn, TermState
 from .meet_interface import db as meet_db
 from .meet_interface.app import router as meet_router
@@ -87,11 +87,16 @@ async def root_redirect() -> RedirectResponse:
 
 PANELS: dict[str, set[WebSocket]] = {"vatsa": set(), "sreedev": set()}
 
-# The browser sends raw pcm_s16le with no container (no RIFF header) - it is NOT a
-# wav file. This literal MUST be confirmed against a live Sarvam socket during
-# preflight, and is the first thing to change if STT comes back with empty
-# transcripts.
-AUDIO_FRAME_ENCODING = "audio/x-raw"
+# CONFIRMED against a live Sarvam socket, not guessed: "audio/wav" is the ONLY
+# accepted value. The SDK types this field as Literal['audio/wav'] and rejects
+# anything else, and a run with raw pcm_s16le frames labelled "audio/wav" returned
+# correct Gujarati transcripts plus START_SPEECH/END_SPEECH VAD signals.
+#
+# It reads like a contradiction - we send headerless PCM, not a RIFF file - but the
+# actual codec is declared once in the connect URL (input_audio_codec=pcm_s16le);
+# this per-message field is metadata the server does not use to parse. An earlier
+# "audio/x-raw" here would have produced empty transcripts on stage.
+AUDIO_FRAME_ENCODING = "audio/wav"
 
 # Guards the read-idx -> append -> save critical section of _finish_turn. Both
 # parties have independent sockets and can enter _finish_turn concurrently; without
@@ -448,6 +453,17 @@ async def replay(scenario: str) -> JSONResponse:
     ]
     return JSONResponse({"scenario": spec["name"], "expected_ok": not mismatches,
                          "mismatches": mismatches, "sheet": sheet})
+
+
+@app.get("/draft")
+async def draft_agreement(lang: str = "en-IN") -> HTMLResponse:
+    """The lawyer's view. `lang` is the LAWYER's language, which may be a third
+    language neither negotiator speaks.
+
+    Drafts only settled terms; everything blocked becomes an open question instead
+    of a clause."""
+    d = await drafter.draft(NEG, lawyer_lang=lang)
+    return HTMLResponse(drafter.render(d, NEG))
 
 
 @app.post("/reset")

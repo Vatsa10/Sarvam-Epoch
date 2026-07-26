@@ -144,6 +144,215 @@ def test_cannot_agree_with_your_own_proposal():
     assert n.terms["rent"].agreed_value is None
 
 
+
+def test_implausible_amount_raises_a_doubt_instead_of_recording_it():
+    """Nobody rents for 17 rupees. "Seventeen" means seventeen thousand, and
+    recording 17 silently becomes a nonsense contract clause."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17",
+                      "verbatim": "17", "stance": "propose"}], 0)
+    t = n.terms["rent"]
+    assert t.doubt and "17000" in t.doubt
+    assert t.agreed_value is None
+    assert t.state is TermState.PROPOSED
+    assert "rent" in flagged
+
+
+def test_doubt_clears_once_a_plausible_amount_is_given():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17",
+            "verbatim": "17", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 1)
+    assert n.terms["rent"].doubt is None
+
+
+def test_counter_offer_is_not_divergence():
+    """Open haggling is the opposite of divergence. DIVERGED means both sides think
+    they agreed; a counter-offer means both sides know they have not."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 0)
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+                      "verbatim": "chaud hajaar", "stance": "counter"}], 1)
+    t = n.terms["rent"]
+    assert t.state is TermState.PROPOSED
+    assert t.state is not TermState.DIVERGED
+    assert t.divergence_note is None
+    assert t.agreed_value is None
+    assert flagged == []
+
+
+def test_magnitude_check_leaves_explicit_units_alone():
+    """'500 fixed' for maintenance is a real answer, not a shorthand - do not
+    second-guess a value that carries words."""
+    from app.mediator import magnitude_doubt
+    assert magnitude_doubt("maintenance", "actual") is None
+    assert magnitude_doubt("maintenance", "fixed 500") is None
+    assert magnitude_doubt("rent", "17000") is None
+    assert magnitude_doubt("duration", "11") is None      # no range for duration
+    assert magnitude_doubt("rent", "17") == "17000"
+
+
+
+def test_a_question_never_becomes_a_proposal():
+    """"What is the rent?" names no value. An update with a blank value must be
+    dropped, or the sheet shows a position nobody took."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "",
+                      "verbatim": "bhaadu shu chhe?", "stance": "propose"}], 0)
+    assert n.terms["rent"].state is TermState.OPEN
+    assert n.terms["rent"].proposals == []
+    assert flagged == []
+
+
+def test_whitespace_only_value_is_also_dropped():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "deposit", "value": "   ",
+            "verbatim": "?", "stance": "propose"}], 0)
+    assert n.terms["deposit"].state is TermState.OPEN
+
+
+def test_plausible_ranges_are_overridable_without_editing_code():
+    """Floors must be tunable on the venue floor. Editing Python between demo runs
+    is how a syntax error reaches a projector.
+
+    Calls _load_plausible() directly rather than reloading the module: importlib
+    .reload swaps the TermState class identity out from under every other test.
+    """
+    import json as _json
+    import os
+    import tempfile
+    from app.mediator import _load_plausible
+
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "plausible.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            _json.dump({"rent": [50, 900]}, fh)
+        os.environ["PLAUSIBLE_JSON"] = f
+        try:
+            ranges = _load_plausible()
+        finally:
+            del os.environ["PLAUSIBLE_JSON"]
+    assert ranges["rent"] == (50, 900)
+    assert ranges["deposit"] == (3000, 5_000_000), "unlisted keys keep their defaults"
+
+
+def test_malformed_override_falls_back_to_defaults():
+    """A bad override must never take the app down mid-demo."""
+    import os
+    import tempfile
+    from app.mediator import _load_plausible
+
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "plausible.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write("{not json")
+        os.environ["PLAUSIBLE_JSON"] = f
+        try:
+            ranges = _load_plausible()
+        finally:
+            del os.environ["PLAUSIBLE_JSON"]
+    assert ranges["rent"] == (1500, 1_000_000)
+
+
+def test_near_floor_numbers_are_not_blown_up():
+    """1400 is a low rent, not a shorthand. Scaling it would propose 1,400,000 -
+    turning a slightly-odd figure into an absurd one."""
+    from app.mediator import magnitude_doubt
+    assert magnitude_doubt("rent", "1400") is None
+    assert magnitude_doubt("rent", "500") is None
+    assert magnitude_doubt("rent", "99") == "99000"
+    assert magnitude_doubt("rent", "17") == "17000"
+    assert magnitude_doubt("deposit", "50") == "50000"
+
+
+
+def test_silent_scaling_is_challenged_not_accepted():
+    """Speaker said "17", model wrote 17000. Probably right - but it is a guess
+    about money, and 17 could have meant 1700. Confirm rather than assume."""
+    from app.mediator import Negotiation, scaled_without_asking
+    assert scaled_without_asking("rent", "₹17", "17000") == "17000"
+    assert scaled_without_asking("rent", "17000", "17000") is None   # no rewrite
+    assert scaled_without_asking("rent", "pandar hajaar", "15000") is None  # no digits
+    assert scaled_without_asking("rent", "₹17", "45000") is None  # unrelated number
+    assert scaled_without_asking("duration", "11", "11000") is None   # no range for duration
+
+    n = Negotiation()
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+                      "verbatim": "₹17", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt and "17000" in n.terms["rent"].doubt
+    assert "rent" in flagged
+    assert n.terms["rent"].agreed_value is None
+
+
+def test_honest_amounts_are_not_challenged():
+    """The guard must not nag about numbers the speaker actually said."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "17000 rupa", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt is None
+    assert n.terms["rent"].state is TermState.PROPOSED
+
+
+
+def test_two_different_numbers_is_haggling_even_when_labelled_accept():
+    """Observed live twice: the model labels a counter-offer as `accept` with a
+    different number. Nobody says "I agree" to 17000 while meaning 14000 - stating
+    your own figure IS the disagreement, and both sides can see it."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "en-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "seventeen thousand", "stance": "propose"}], 0)
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+                      "verbatim": "chaud hajaar", "stance": "accept"}], 1)
+    t = n.terms["rent"]
+    assert t.state is TermState.PROPOSED, f"haggling must not be {t.state}"
+    assert t.divergence_note is None
+    assert flagged == []
+
+
+def test_descriptive_mismatch_is_still_divergence():
+    """The number guard must not disarm the real mechanic. "actual" vs "fixed 500"
+    is where hidden divergence lives - both sides think "separate" means the same."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "maintenance", "value": "actual",
+            "verbatim": "alag", "stance": "propose"}], 0)
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "maintenance", "value": "fixed 500",
+                      "verbatim": "500 rupa", "stance": "accept"}], 1)
+    assert n.terms["maintenance"].state is TermState.DIVERGED
+    assert "maintenance" in flagged
+
+
+def test_both_plain_numbers_helper():
+    from app.mediator import _both_plain_numbers
+    assert _both_plain_numbers("17000", "14000")
+    assert _both_plain_numbers("15,000", "15000")
+    assert not _both_plain_numbers("actual", "fixed 500")
+    assert not _both_plain_numbers("17000", "fixed 500")
+    assert not _both_plain_numbers("", "14000")
+
+
+def test_scaling_doubt_names_the_spoken_number_not_the_assumption():
+    """The message must not read "you said 17000, did you mean 17000?"."""
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "en-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "I expect 17 for the month", "stance": "propose"}], 0)
+    d = n.terms["rent"].doubt
+    assert d, "silent scaling must raise a doubt"
+    assert "'17'" in d, f"should quote the SPOKEN number: {d}"
+    assert "17000" in d, f"should name the assumption: {d}"
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

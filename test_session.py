@@ -114,6 +114,24 @@ def test_roundtrip_preserves_native_script():
     assert quotes == ["પંદર હજાર", "പതിനഞ്ച്"]
 
 
+
+def test_doubt_survives_a_restart():
+    """An unanswered magnitude question is a pending correction. Losing it across a
+    restart silently re-accepts a number nobody confirmed."""
+    import pathlib, tempfile
+    from app import session
+    from app.mediator import Negotiation
+    n = Negotiation("d")
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17",
+            "verbatim": "17", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / "s.json"
+        session.save(n, p)
+        back = session.load(p, "d")
+    assert back.terms["rent"].doubt == n.terms["rent"].doubt
+
+
 if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_"):

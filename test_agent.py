@@ -59,17 +59,25 @@ def test_check_readiness_lists_undiscussed_terms():
 
 
 def test_flag_divergence_tool_branch():
+    """Divergence needs values that are describable the same way while meaning
+    different things.
+
+    This test used to use rent 15000 vs 12000, which was wrong: two bare, different
+    numbers are OPEN haggling that both sides can see, and is_open_haggle now
+    correctly refuses to call that a divergence. "actual" vs "fixed 500" is the real
+    shape - both parties said "separate" and each heard something else.
+    """
     neg = Negotiation()
     apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
-        "term": "rent", "value": "15000", "verbatim": "pandar hajaar", "stance": "propose"}}], 0)
+        "term": "maintenance", "value": "actual", "verbatim": "alag", "stance": "propose"}}], 0)
     apply_tool_calls(neg, "sreedev", "ml-IN", [{"name": "update_term", "arguments": {
-        "term": "rent", "value": "12000", "verbatim": "pantranda", "stance": "propose"}}], 1)
+        "term": "maintenance", "value": "fixed 500", "verbatim": "500 rupa", "stance": "propose"}}], 1)
     res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "flag_divergence", "arguments": {
-        "term": "rent", "note": "amounts differ"}}], 2)
-    assert neg.terms["rent"].state is TermState.DIVERGED
-    assert neg.terms["rent"].agreed_value is None
-    assert neg.terms["rent"].divergence_note == "amounts differ"
-    assert "rent" in res.flagged
+        "term": "maintenance", "note": "actual vs a fixed 500"}}], 2)
+    assert neg.terms["maintenance"].state is TermState.DIVERGED
+    assert neg.terms["maintenance"].agreed_value is None
+    assert neg.terms["maintenance"].divergence_note == "actual vs a fixed 500"
+    assert "maintenance" in res.flagged
 
 
 def test_flag_divergence_unknown_term_is_ignored():
@@ -154,6 +162,90 @@ def test_context_history_does_not_leak_into_the_current_utterance_block():
     tail = ctx.split("THIS UTTERANCE")[1]
     assert "NEWWORDS" in tail
     assert "OLDWORDS" not in tail
+
+
+
+def test_flag_divergence_is_ignored_on_a_counter_offer():
+    """Observed live: the model countered 14000 against 17000 and ALSO called
+    flag_divergence in the same turn. Flags apply last, so it overwrote PROPOSED
+    back to DIVERGED. A counter-offer is open disagreement - the opposite of
+    divergence - so the flag must be dropped in code, not just discouraged in the
+    prompt."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "sreedev", "ml-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "17000", "verbatim": "pathinezhayiram",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "rent", "value": "14000", "verbatim": "chaud hajaar",
+            "stance": "counter"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "rent", "note": "they disagree on rent"}},
+    ], 1)
+    t = neg.terms["rent"]
+    assert t.state is TermState.PROPOSED, f"counter must not become {t.state}"
+    assert t.divergence_note is None
+    assert "rent" not in res.flagged
+
+
+def test_flag_divergence_still_works_when_there_was_no_counter():
+    """The guard must not disarm real divergence detection."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
+        "term": "maintenance", "value": "actual", "verbatim": "alag",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "sreedev", "ml-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "maintenance", "value": "fixed 500", "verbatim": "500",
+            "stance": "accept"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "maintenance", "note": "actual vs fixed 500"}},
+    ], 1)
+    assert neg.terms["maintenance"].state is TermState.DIVERGED
+    assert "maintenance" in res.flagged
+
+
+
+def test_flag_divergence_ignored_when_figures_are_openly_different():
+    """The model labelled the counter-offer `accept` (not `counter`) AND called
+    flag_divergence. The stance-based guard misses that; the figures do not."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "sreedev", "en-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "17000", "verbatim": "seventeen thousand",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "rent", "value": "14000", "verbatim": "chaud hajaar",
+            "stance": "accept"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "rent", "note": "Vatsa accepts but means fourteen thousand"}},
+    ], 1)
+    t = neg.terms["rent"]
+    assert t.state is TermState.PROPOSED, f"open haggling must not be {t.state}"
+    assert t.divergence_note is None
+    assert "rent" not in res.flagged
+
+
+def test_is_open_haggle_only_fires_on_two_bare_numbers():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    assert not n.is_open_haggle("rent"), "no proposals yet"
+    n.apply("vatsa", "gu-IN", [{"term": "maintenance", "value": "actual",
+            "verbatim": "alag", "stance": "propose"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "maintenance", "value": "fixed 500",
+            "verbatim": "500", "stance": "accept"}], 1)
+    assert not n.is_open_haggle("maintenance"), "descriptive mismatch is divergence"
+    n.apply("vatsa", "gu-IN", [{"term": "deposit", "value": "50000",
+            "verbatim": "50k", "stance": "propose"}], 2)
+    n.apply("sreedev", "ml-IN", [{"term": "deposit", "value": "50000",
+            "verbatim": "50k", "stance": "accept"}], 3)
+    assert not n.is_open_haggle("deposit"), "same number is agreement, not haggling"
 
 
 if __name__ == "__main__":

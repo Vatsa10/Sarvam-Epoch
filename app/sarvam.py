@@ -118,12 +118,23 @@ async def chat_tools(system: str, user: str, tools: list[dict],
 
 
 async def translate(text: str, target_language_code: str,
-                    source_language_code: str = "auto") -> str:
+                    source_language_code: str = "auto",
+                    mode: str = "code-mixed") -> str:
     """Live-notes path. Deliberately uses /translate, not the chat model: it is a
     separate 60/min quota bucket, so partials never eat the 40/min sarvam-30b budget.
 
     mayura:v1 caps at 1000 chars; a single VAD segment is far below that.
+
+    mode: "code-mixed" mirrors how people actually type and is right for on-screen
+    notes. Use "formal" for anything Bulbul will SPEAK - code-mixed output leaves
+    English words stranded mid-sentence, which sounds wrong read aloud.
     """
+    # Same language in and out is a no-op, and Mayura 400s on it. This is reachable
+    # in normal use - the moment either party picks English, the English gloss and
+    # the relay both become en-IN -> en-IN.
+    if source_language_code == target_language_code:
+        return text
+
     r = await _client.post(
         TRANSLATE_URL,
         headers={**HEADERS, "Content-Type": "application/json"},
@@ -132,10 +143,17 @@ async def translate(text: str, target_language_code: str,
             "source_language_code": source_language_code,
             "target_language_code": target_language_code,
             "model": "mayura:v1",
-            "mode": "code-mixed",
+            "mode": mode,
         },
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # Surface what the API actually objected to. A bare "400 Bad Request" during
+        # a live demo tells you nothing about which field was wrong.
+        raise httpx.HTTPStatusError(
+            f"translate {source_language_code}->{target_language_code} failed "
+            f"[{r.status_code}]: {r.text[:300]}",
+            request=r.request, response=r,
+        )
     return r.json().get("translated_text", "")
 
 

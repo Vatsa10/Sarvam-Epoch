@@ -5,11 +5,55 @@ to record an agreement that isn't one.
 
 **Declared Sarvam parameter: VOICE EXPERIENCE.** One parameter. Extra APIs score zero.
 
+---
+
+## The thesis
+
+Vatsa says maintenance is *alag* — separate, meaning actual repair costs. Sreedev
+agrees, meaning a fixed ₹500/month.
+
+**Both said yes. Both meant different things.** A relay translates both yeses
+perfectly, neither party ever learns they diverged, and six months later that is a
+court case. The translation was correct and the outcome was a dispute.
+
+So the system tracks a *state* per term:
+
+| State | Meaning |
+|---|---|
+| `AGREED` | both sides, same value — safe to draft |
+| `DIVERGED` | **both said yes to different values** — nobody realises |
+| `HEDGED` | *"dekhte hain"* — a soft non-answer, never an agreement |
+| `PROPOSED` | on the table, including open haggling |
+| `REJECTED` / `OPEN` | refused / never discussed |
+
+`DIVERGED` is a state no translation layer can produce. That is the product.
+
+---
+
+## Tech stack
+
+| Layer | What we use | Why |
+|---|---|---|
+| **Speech in** | **Saaras v3** (`saaras:v3`, `mode=codemix`) — REST + streaming WebSocket | 23 languages, code-mix native. Word timestamps and server-side VAD (`START_SPEECH`/`END_SPEECH`) segment turns. |
+| **Speech out** | **Bulbul v3** (`bulbul:v3`) | 11 languages, 30+ voices. Each party gets a distinct voice; `pace` shifts for sensitive moments. |
+| **Translation** | **Mayura v1** (`mayura:v1`) | `code-mixed` for on-screen notes, `formal` for anything spoken aloud. |
+| **Reasoning** | **gpt-4o-mini** via OpenAI SDK | Tool calling for the mediator agent. Swappable to `sarvam-30b` with one env var (`AGENT_PROVIDER=sarvam`). |
+| **Audio capture** | `sounddevice` / Web Audio `AudioWorklet` | Raw 16 kHz `pcm_s16le` — the STT WebSocket rejects webm/opus. |
+| **Backend** | FastAPI + `websockets`, `httpx` | One WS per party, proxied to Sarvam's STT socket. |
+| **Frontend** | Single HTML page, no build step | |
+| **State** | Append-only JSON log on disk | Survives a live server restart. No database. |
+| **SDK** | `sarvamai` (`pip install sarvamai`) | Official client — typed errors, async, streaming. |
+
+**Why the split:** `sarvam-30b` is capped at 40 req/min. Moving reasoning to
+`gpt-4o-mini` frees that entire budget for speech, and `/translate` is a *separate*
+60/min bucket, so live notes never eat the reasoning quota.
+
+---
+
 ## Run
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env      # paste the Sarvam API key + a Postgres DATABASE_URL
 
