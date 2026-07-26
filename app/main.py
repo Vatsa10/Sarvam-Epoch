@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import pathlib
+import time
 from typing import Any
 
 import websockets
@@ -103,11 +104,19 @@ async def ws_party(client: WebSocket, party: str) -> None:
             async def pump_down() -> None:
                 """Sarvam -> notes, and on turn end, the agent."""
                 buffer: list[str] = []
+                last_partial = 0.0
                 try:
                     async for raw in up:
                         kind, text = stt_stream.classify(json.loads(raw))
 
                         if kind == "partial":
+                            # Every STT partial otherwise fires a /translate call and
+                            # exhausts the 60/min rate bucket in ~40s, blocking this
+                            # read loop. Finals stay unthrottled.
+                            now = time.monotonic()
+                            if now - last_partial < 1.5:
+                                continue
+                            last_partial = now
                             note = await _safe_translate(text, other_cfg["lang"], me["lang"])
                             await _broadcast(other, {"type": "note", "final": False,
                                                      "from": me["name"], "text": note})
@@ -155,7 +164,7 @@ async def ws_party(client: WebSocket, party: str) -> None:
     except WebSocketDisconnect:
         pass
     except Exception as e:  # noqa: BLE001
-        await _broadcast(party, {"type": "error", "text": f"{type(e).__name__}: {e}"})
+        await _broadcast(party, {"type": "error", "text": f"{type(e).__name__}: {str(e)[:80]}"})
     finally:
         PANELS[party].discard(client)
 

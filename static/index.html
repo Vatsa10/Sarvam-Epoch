@@ -84,6 +84,12 @@ async function startCapture(onChunk){
   const node = new AudioWorkletNode(ctx, 'pcm-worklet');
   node.port.onmessage = e => onChunk(e.data);
   src.connect(node);
+  // Chrome's audio graph is pull-driven from the destination: a node with no
+  // path to destination may never have process() called. Route through a
+  // muted gain node so the worklet gets pulled without anything audible.
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  node.connect(sink).connect(ctx.destination);
   return {async stop(){
     // Flush the worklet's partial buffer (up to ~99ms) before tearing down -
     // the decisive word in a turn often lands right at the end of speech,
@@ -92,7 +98,7 @@ async function startCapture(onChunk){
     node.port.postMessage({flush: true});
     await new Promise(r => setTimeout(r, 30));
     node.port.onmessage = null;
-    node.disconnect(); src.disconnect();
+    node.disconnect(); sink.disconnect(); src.disconnect();
     stream.getTracks().forEach(t => t.stop());
     ctx.close();
   }};

@@ -29,7 +29,7 @@ def _client():
     global _openai_client
     if _openai_client is None:
         from openai import AsyncOpenAI
-        _openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
+        _openai_client = AsyncOpenAI(api_key=OPENAI_KEY, timeout=20.0, max_retries=1)
     return _openai_client
 
 
