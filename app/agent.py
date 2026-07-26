@@ -186,7 +186,11 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
     countered = {u.get("term") for u in updates if u.get("stance") == "counter"}
 
     for key, note in flags:
-        if key in countered:
+        # Two ways the model gets this wrong, both seen live: it labels the
+        # counter-offer `counter` and flags it anyway, or it labels it `accept` with
+        # a different number and flags that. is_open_haggle catches the second by
+        # looking at the figures themselves rather than at the label.
+        if key in countered or neg.is_open_haggle(key):
             continue
         t = neg.terms.get(key)
         if t is not None and t.proposals:

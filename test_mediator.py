@@ -302,6 +302,57 @@ def test_honest_amounts_are_not_challenged():
     assert n.terms["rent"].state is TermState.PROPOSED
 
 
+
+def test_two_different_numbers_is_haggling_even_when_labelled_accept():
+    """Observed live twice: the model labels a counter-offer as `accept` with a
+    different number. Nobody says "I agree" to 17000 while meaning 14000 - stating
+    your own figure IS the disagreement, and both sides can see it."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "en-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "seventeen thousand", "stance": "propose"}], 0)
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+                      "verbatim": "chaud hajaar", "stance": "accept"}], 1)
+    t = n.terms["rent"]
+    assert t.state is TermState.PROPOSED, f"haggling must not be {t.state}"
+    assert t.divergence_note is None
+    assert flagged == []
+
+
+def test_descriptive_mismatch_is_still_divergence():
+    """The number guard must not disarm the real mechanic. "actual" vs "fixed 500"
+    is where hidden divergence lives - both sides think "separate" means the same."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "maintenance", "value": "actual",
+            "verbatim": "alag", "stance": "propose"}], 0)
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "maintenance", "value": "fixed 500",
+                      "verbatim": "500 rupa", "stance": "accept"}], 1)
+    assert n.terms["maintenance"].state is TermState.DIVERGED
+    assert "maintenance" in flagged
+
+
+def test_both_plain_numbers_helper():
+    from app.mediator import _both_plain_numbers
+    assert _both_plain_numbers("17000", "14000")
+    assert _both_plain_numbers("15,000", "15000")
+    assert not _both_plain_numbers("actual", "fixed 500")
+    assert not _both_plain_numbers("17000", "fixed 500")
+    assert not _both_plain_numbers("", "14000")
+
+
+def test_scaling_doubt_names_the_spoken_number_not_the_assumption():
+    """The message must not read "you said 17000, did you mean 17000?"."""
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "en-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "I expect 17 for the month", "stance": "propose"}], 0)
+    d = n.terms["rent"].doubt
+    assert d, "silent scaling must raise a doubt"
+    assert "'17'" in d, f"should quote the SPOKEN number: {d}"
+    assert "17000" in d, f"should name the assumption: {d}"
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

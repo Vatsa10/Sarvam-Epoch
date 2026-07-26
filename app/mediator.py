@@ -227,13 +227,26 @@ class Negotiation:
             # Before anything is recorded: is this number even possible? "17" for a
             # monthly rent is not a cheap flat, it is a misheard "seventeen thousand".
             if prop.stance in ("propose", "counter", "accept"):
-                likely = (magnitude_doubt(key, prop.value)
-                          or scaled_without_asking(key, prop.verbatim, prop.value))
-                if likely:
-                    term.doubt = (
-                        f"{party} said '{prop.value}' for {key} — that is implausibly "
-                        f"low. Confirm whether they mean {likely}."
-                    )
+                likely = magnitude_doubt(key, prop.value)
+                assumed = None if likely else scaled_without_asking(
+                    key, prop.verbatim, prop.value)
+                if likely or assumed:
+                    # Two different doubts, and they must not share wording. When the
+                    # raw value is implausible, quote what they said. When the model
+                    # silently scaled it, quote the SPOKEN number and name the
+                    # assumption - otherwise the question reads "you said 17000, did
+                    # you mean 17000?", which is gibberish.
+                    if likely:
+                        term.doubt = (
+                            f"{party} said '{prop.value}' for {key} — implausibly "
+                            f"low. Confirm whether they mean {likely}."
+                        )
+                    else:
+                        spoken = "".join(c for c in prop.verbatim if c.isdigit())
+                        term.doubt = (
+                            f"{party} only said '{spoken}' for {key}; it was read as "
+                            f"{assumed}. Confirm that, or the other reading."
+                        )
                     term.state = TermState.PROPOSED
                     term.agreed_value = None
                     needs_interjection.append(key)
@@ -269,6 +282,20 @@ class Negotiation:
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value
                     term.divergence_note = None
+                elif _both_plain_numbers(prior.value, prop.value):
+                    # Two explicit, different NUMBERS is haggling, not divergence -
+                    # whatever stance the model picked. Nobody says "I agree" to
+                    # 17000 while meaning 14000; stating your own figure IS the
+                    # disagreement, and both sides can see it.
+                    #
+                    # Divergence needs the values to be describable the same way
+                    # while meaning different things ("separate" = actual cost vs a
+                    # fixed 500). That case survives because those are not both
+                    # plain numbers. This is the guard that holds when the model
+                    # labels a counter-offer as `accept`, which it does.
+                    term.state = TermState.PROPOSED
+                    term.agreed_value = None
+                    term.divergence_note = None
                 else:
                     # BOTH SAID YES. TO DIFFERENT THINGS. This is the whole product.
                     term.state = TermState.DIVERGED
@@ -288,6 +315,23 @@ class Negotiation:
                 term.divergence_note = None
 
         return needs_interjection
+
+    def is_open_haggle(self, key: str) -> bool:
+        """True when the two sides' latest figures are both bare numbers that differ.
+
+        That is visible disagreement, so it can never be a hidden divergence - and
+        the model cannot be trusted to keep the two apart. It has labelled a
+        counter-offer `accept`, and separately called flag_divergence on one, so
+        both the state machine and the tool dispatcher check this.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        ids = list(sarvam.PARTIES)
+        a, b = (term.latest_by(p) for p in ids)
+        if a is None or b is None:
+            return False
+        return _both_plain_numbers(a.value, b.value) and not _same(a.value, b.value)
 
     def transcript_history(self, limit: int = 6) -> str:
         """Recent turns, each attributed to a named speaker.
@@ -348,6 +392,19 @@ def _same(a: str, b: str) -> bool:
 
 
 _NOISE = ("rupees", "rupee", "inr", "rs", "permonth", "monthly", "months", "month", "days", "day")
+
+
+def _both_plain_numbers(a: str, b: str) -> bool:
+    """True when both values are bare figures with no qualifying words.
+
+    "17000" and "14000" -> True (open haggling).
+    "actual" and "fixed 500" -> False (the words carry the disagreement, and that
+    is where hidden divergence lives).
+    """
+    def plain(v: str) -> bool:
+        alnum = "".join(c for c in v if c.isalnum())
+        return bool(alnum) and alnum.isdigit()
+    return plain(a) and plain(b)
 
 
 def _norm(s: str) -> str:

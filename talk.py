@@ -418,6 +418,12 @@ async def listen(mediate: bool = True) -> None:
             await sv.aclose()
             print("\nbye\n")
             return
+        except Exception as e:  # noqa: BLE001
+            # One bad turn must not end the session. A crash mid-demo loses the whole
+            # negotiation; a skipped turn loses ten seconds. The sheet is untouched,
+            # so just hand the mic back and carry on.
+            print(f"\n  ⚠ turn failed: {type(e).__name__}: {str(e)[:200]}")
+            print("  sheet is unchanged — take that turn again.\n")
 
 
 async def stream(src_code: str, src_name: str) -> None:

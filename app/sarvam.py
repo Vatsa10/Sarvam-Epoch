@@ -129,6 +129,12 @@ async def translate(text: str, target_language_code: str,
     notes. Use "formal" for anything Bulbul will SPEAK - code-mixed output leaves
     English words stranded mid-sentence, which sounds wrong read aloud.
     """
+    # Same language in and out is a no-op, and Mayura 400s on it. This is reachable
+    # in normal use - the moment either party picks English, the English gloss and
+    # the relay both become en-IN -> en-IN.
+    if source_language_code == target_language_code:
+        return text
+
     r = await _client.post(
         TRANSLATE_URL,
         headers={**HEADERS, "Content-Type": "application/json"},
@@ -140,7 +146,14 @@ async def translate(text: str, target_language_code: str,
             "mode": mode,
         },
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # Surface what the API actually objected to. A bare "400 Bad Request" during
+        # a live demo tells you nothing about which field was wrong.
+        raise httpx.HTTPStatusError(
+            f"translate {source_language_code}->{target_language_code} failed "
+            f"[{r.status_code}]: {r.text[:300]}",
+            request=r.request, response=r,
+        )
     return r.json().get("translated_text", "")
 
 
