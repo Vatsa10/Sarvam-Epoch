@@ -12,6 +12,7 @@ agreement becomes a dispute.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from . import llm, sarvam
@@ -93,10 +94,59 @@ def _blocked(neg: Negotiation) -> list[dict]:
     return out
 
 
-async def draft(neg: Negotiation, lawyer_lang: str = "en-IN") -> Draft:
+_NUM = re.compile(r"\d[\d,]*")
+
+
+def _tx_lines(transcript: list[dict], key: str) -> list[dict]:
+    """Transcript entries that mention this term by key. Cheap substring match —
+    ponytail: no embeddings, no LLM call, just the word the term is named after."""
+    k = key.lower()
+    return [e for e in transcript if k in (e.get("text") or "").lower()]
+
+
+def _tx_split(transcript: list[dict], settled: list[dict]) -> list[dict]:
+    """Attach transcript evidence to settled terms, and pull out any term whose
+    agreed value the transcript contradicts.
+
+    A contradiction is only claimed on numbers: the term is mentioned in the call and
+    every figure spoken alongside it differs from the value on the sheet. Non-numeric
+    talk is never treated as a contradiction — the transcript is in the parties' own
+    languages and scripts, and guessing at disagreement there would either invent
+    conflicts or, worse, silently drop a clause the parties really did settle.
+    Returns the conflicting entries; `settled` is mutated in place.
+    """
+    conflicts = []
+    for s in list(settled):
+        lines = _tx_lines(transcript, s["term"])
+        if not lines:
+            continue
+        want = set(_NUM.findall(str(s["value"]).replace(",", "")))
+        said = {n.replace(",", "") for ln in lines for n in _NUM.findall(ln["text"])}
+        quotes = [f"{ln.get('speaker_name', ln.get('speaker_id', '?'))} "
+                  f"({ln.get('lang', '')}): “{ln['text']}”" for ln in lines]
+        if want and said and not (want & said):
+            settled.remove(s)
+            conflicts.append({
+                "reason": f"{s['term']}: the term sheet says {s['value']}, but the call "
+                          f"transcript records a different figure. Do not draft this "
+                          f"clause until one value is confirmed.",
+                "quotes": quotes,
+            })
+        else:
+            s["provenance"] = "; ".join(filter(None, [s["provenance"]] + quotes))
+    return conflicts
+
+
+async def draft(neg: Negotiation, lawyer_lang: str = "en-IN",
+                transcript: list[dict] | None = None) -> Draft:
     """Produce the draft in the lawyer's language. Never raises — a failed draft
-    still returns the open questions, which are the part that stops a bad clause."""
+    still returns the open questions, which are the part that stops a bad clause.
+
+    `transcript` is the raw call log (`{speaker_id, speaker_name, lang, text, ts}`).
+    It is supporting evidence only: it can add provenance to a settled term, or move
+    one into the open questions, but it can never promote anything into a clause."""
     settled, blocked = _settled(neg), _blocked(neg)
+    blocked += _tx_split(transcript or [], settled)
     result = Draft(lawyer_lang=lawyer_lang, ready=not blocked)
 
     if settled:
@@ -186,3 +236,34 @@ Quotes are each party's own unedited words.</div>
 <p class=sub>Terms absent from the clause list were never settled by both parties.
 They are listed above rather than drafted, because a clause the parties did not agree
 to is how a mediated agreement becomes a dispute.</p>"""
+
+
+if __name__ == "__main__":   # python -m app.drafter — the rule, asserted.
+    import asyncio
+
+    from .mediator import Proposal
+
+    neg = Negotiation(session_id="test")
+    d = neg.terms["deposit"]
+    d.state, d.agreed_value = TermState.AGREED, "50000"
+    d.proposals = [Proposal("p1", "50000", "fifty thousand", "en-IN", "propose", 0)]
+    m = neg.terms["maintenance"]
+    m.state = TermState.DIVERGED
+    m.proposals = [Proposal("p1", "actual", "alag", "hi-IN", "propose", 1),
+                   Proposal("p2", "500", "five hundred fixed", "ml-IN", "accept", 1)]
+
+    tx = [{"speaker_id": "p2", "speaker_name": "B", "lang": "en-IN", "ts": 0.0,
+           "text": "the deposit is 40000, not what the sheet says"}]
+
+    # 1. a DIVERGED term is an open question, never a clause.
+    out = asyncio.run(draft(neg, "en-IN", []))
+    assert not any(c["term"] == "maintenance" for c in out.clauses), out.clauses
+    assert any("maintenance" in q["reason"] for q in out.open_questions), out.open_questions
+    assert not out.ready
+
+    # 2. a transcript that contradicts a settled figure demotes it too.
+    out2 = asyncio.run(draft(neg, "en-IN", tx))
+    assert not any(c["term"] == "deposit" for c in out2.clauses), out2.clauses
+    assert any("deposit" in q["reason"] and "50000" in q["reason"]
+               for q in out2.open_questions), out2.open_questions
+    print("ok — blocked and contradicted terms become open questions, not clauses")

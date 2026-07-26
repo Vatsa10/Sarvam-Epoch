@@ -44,7 +44,13 @@ async def _best_effort(coro: Awaitable[T], default: T) -> T:
 class Participant:
     party_id: str          # "p1" | "p2" - stable identity within the room
     name: str
-    lang: str
+    lang: str              # what they SPEAK - the STT source language
+    out_lang: str = ""     # what they want to SEE/HEAR - captions + TTS target.
+                           # Empty means "same as lang" (backward compat).
+
+    def __post_init__(self) -> None:
+        if not self.out_lang:
+            self.out_lang = self.lang
 
 
 @dataclass
@@ -57,6 +63,10 @@ class Room:
     # both flip together, so the two parties can never be transcribing at once.
     turn_holder: str = "p1"
     floor_open: bool = False
+    # Append-only record of every finalized turn, in the speaker's own words.
+    # CONTRACT (consumed by the drafter): each entry is exactly
+    # {"speaker_id": str, "speaker_name": str, "lang": str, "text": str, "ts": float}
+    transcript: list[dict] = field(default_factory=list)
 
     def other(self, party_id: str) -> Participant | None:
         for pid, p in self.participants.items():
@@ -107,18 +117,35 @@ async def get_or_restore_room(code: str) -> Room | None:
     return room
 
 
-async def reserve_slot(code: str, name: str, lang: str) -> tuple[Room, Participant] | None:
-    """Claim a party_id in the room, or None if full/missing/unsupported language."""
-    if not languages.is_supported(lang):
+async def reserve_slot(code: str, name: str, lang: str, out_lang: str = "") -> tuple[Room, Participant] | None:
+    """Claim a party_id in the room, or None if full/missing/unsupported language.
+
+    `out_lang` (captions + TTS target) defaults to `lang` when absent."""
+    out_lang = out_lang or lang
+    if not languages.is_supported(lang) or not languages.is_supported(out_lang):
         return None
     room = await get_or_restore_room(code)
     if room is None or room.is_full():
         return None
     party_id = "p1" if "p1" not in room.participants else "p2"
-    participant = Participant(party_id=party_id, name=name.strip()[:40] or "Guest", lang=lang)
+    participant = Participant(party_id=party_id, name=name.strip()[:40] or "Guest",
+                              lang=lang, out_lang=out_lang)
     room.participants[party_id] = participant
-    await _best_effort(db.upsert_participant(room.code, party_id, participant.name, participant.lang), None)
+    await _best_effort(
+        db.upsert_participant(room.code, party_id, participant.name,
+                              participant.lang, participant.out_lang), None)
     return room, participant
+
+
+async def set_out_lang(room: Room, participant: Participant, out_lang: str) -> bool:
+    """Mid-call change of the language this participant reads/hears."""
+    if not languages.is_supported(out_lang):
+        return False
+    participant.out_lang = out_lang
+    await _best_effort(
+        db.upsert_participant(room.code, participant.party_id, participant.name,
+                              participant.lang, participant.out_lang), None)
+    return True
 
 
 async def release_slot(code: str, party_id: str) -> None:

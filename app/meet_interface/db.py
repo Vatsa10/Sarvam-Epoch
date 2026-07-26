@@ -39,9 +39,13 @@ CREATE TABLE IF NOT EXISTS meet_participants (
     party_id TEXT NOT NULL,
     name TEXT NOT NULL,
     lang TEXT NOT NULL,
+    out_lang TEXT NOT NULL DEFAULT '',
     joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (room_code, party_id)
 );
+
+-- Tables predating the speak/hear language split are missing out_lang.
+ALTER TABLE meet_participants ADD COLUMN IF NOT EXISTS out_lang TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS meet_sheets (
     room_code TEXT PRIMARY KEY REFERENCES meet_rooms(code) ON DELETE CASCADE,
@@ -92,14 +96,16 @@ async def room_exists(code: str) -> bool:
     return row is not None
 
 
-async def upsert_participant(code: str, party_id: str, name: str, lang: str) -> None:
+async def upsert_participant(code: str, party_id: str, name: str, lang: str,
+                             out_lang: str = "") -> None:
     pool = await get_pool()
     await pool.execute(
-        """INSERT INTO meet_participants (room_code, party_id, name, lang)
-           VALUES ($1, $2, $3, $4)
+        """INSERT INTO meet_participants (room_code, party_id, name, lang, out_lang)
+           VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (room_code, party_id)
-           DO UPDATE SET name = EXCLUDED.name, lang = EXCLUDED.lang""",
-        code, party_id, name, lang,
+           DO UPDATE SET name = EXCLUDED.name, lang = EXCLUDED.lang,
+                         out_lang = EXCLUDED.out_lang""",
+        code, party_id, name, lang, out_lang or lang,
     )
 
 

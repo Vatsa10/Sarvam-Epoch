@@ -36,6 +36,18 @@ def speaker(language_code: str) -> str:
     return LANGUAGES.get(language_code, {}).get("speaker", "")
 
 
+def route(sender_lang: str, listener_out_lang: str) -> tuple[str | None, str]:
+    """Pick how one utterance reaches one listener.
+
+    Returns (translate_target, tts_speaker). `translate_target` is None when the
+    listener already reads/hears the language it was spoken in - that caption is
+    verbatim and costs no /translate call. The speaker is ALWAYS the listener's
+    output language's Bulbul voice, never the sender's.
+    """
+    target = None if sender_lang == listener_out_lang else listener_out_lang
+    return target, speaker(listener_out_lang)
+
+
 def as_list() -> list[dict[str, str]]:
     """Client-facing shape for the language picker dropdown."""
     return [{"code": code, "label": info["label"]} for code, info in LANGUAGES.items()]

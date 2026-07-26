@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json as _json
+import time
 
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -63,9 +64,11 @@ async def _safe_translate(text: str, target: str, source: str) -> str:
 async def ws_room(client: WebSocket, code: str) -> None:
     name = client.query_params.get("name", "Guest")
     lang = client.query_params.get("lang", "")
+    # Absent out_lang means "I read/hear what I speak" - the pre-split behaviour.
+    out_lang = client.query_params.get("out_lang", "")
     await client.accept()
 
-    reservation = await rooms.reserve_slot(code, name, lang)
+    reservation = await rooms.reserve_slot(code, name, lang, out_lang)
     if reservation is None:
         await client.send_json({
             "type": "error",
@@ -80,8 +83,9 @@ async def ws_room(client: WebSocket, code: str) -> None:
 
     await client.send_json({
         "type": "joined",
-        "you": {"party_id": me.party_id, "name": me.name, "lang": me.lang},
-        "other": {"party_id": other.party_id, "name": other.name, "lang": other.lang} if other else None,
+        "you": {"party_id": me.party_id, "name": me.name, "lang": me.lang, "out_lang": me.out_lang},
+        "other": {"party_id": other.party_id, "name": other.name, "lang": other.lang,
+                  "out_lang": other.out_lang} if other else None,
         "sheet": room.negotiation.sheet(),
         "turn_holder": room.turn_holder, "floor_open": room.floor_open,
     })
@@ -89,6 +93,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
         await _send(room.code, other.party_id, {
             "type": "participant_joined",
             "party_id": me.party_id, "name": me.name, "lang": me.lang,
+            "out_lang": me.out_lang,
         })
 
     url = stt_stream.build_ws_url(me.lang)
@@ -130,7 +135,7 @@ async def ws_room(client: WebSocket, code: str) -> None:
                         ctrl = _json.loads(raw_text)
                     except ValueError:
                         continue
-                    await _handle_control(room, me, ctrl.get("type", ""), state)
+                    await _handle_control(room, me, ctrl.get("type", ""), state, ctrl)
 
             async def pump_down() -> None:
                 """Sarvam STT WS -> live captions for whoever currently holds
@@ -152,16 +157,18 @@ async def ws_room(client: WebSocket, code: str) -> None:
                     is_final = kind == "final"
                     if is_final:
                         state["buffer"].append(text)
-                    # Speaker sees their own words verbatim - no extra API call.
-                    await _send(room.code, me.party_id, {
-                        "type": "note", "final": is_final,
-                        "from": me.name, "lang": me.lang, "text": text,
-                    })
-                    if other_now is not None:
-                        translated = await _safe_translate(text, other_now.lang, me.lang)
-                        await _send(room.code, other_now.party_id, {
+                    # Every caption is rendered in ITS OWN reader's output
+                    # language - including the speaker's, who may want to read
+                    # something other than what they speak. Same-language stays
+                    # verbatim and costs no extra API call.
+                    for listener in (me, other_now):
+                        if listener is None:
+                            continue
+                        target, _ = languages.route(me.lang, listener.out_lang)
+                        shown = text if target is None else await _safe_translate(text, target, me.lang)
+                        await _send(room.code, listener.party_id, {
                             "type": "note", "final": is_final,
-                            "from": me.name, "lang": other_now.lang, "text": translated,
+                            "from": me.name, "lang": listener.out_lang, "text": shown,
                         })
 
             await asyncio.gather(pump_up(), pump_down())
@@ -189,8 +196,20 @@ async def ws_room(client: WebSocket, code: str) -> None:
             })
 
 
-async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, state: dict) -> None:
-    if kind == "talk_start":
+async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, state: dict,
+                          ctrl: dict | None = None) -> None:
+    if kind == "set_out_lang":
+        want = (ctrl or {}).get("lang", "")
+        if not await rooms.set_out_lang(room, me, want):
+            await _send(room.code, me.party_id, {"type": "error", "text": "Unsupported language."})
+            return
+        await _send(room.code, me.party_id, {"type": "out_lang", "party_id": me.party_id, "lang": me.out_lang})
+        other = room.other(me.party_id)
+        if other is not None:
+            await _send(room.code, other.party_id,
+                        {"type": "out_lang", "party_id": me.party_id, "lang": me.out_lang})
+
+    elif kind == "talk_start":
         if room.turn_holder != me.party_id:
             await _send(room.code, me.party_id, {"type": "error", "text": "Not your turn to talk."})
             return
@@ -250,8 +269,11 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     spoken = res.clarification or res.summary or gloss
     audio = ""
     if spoken and other is not None:
+        # The listener hears their OUTPUT language, in that language's Bulbul
+        # voice - never the sender's.
+        _, voice = languages.route(speaker_lang, other.out_lang)
         try:
-            spoken = await sarvam.translate(spoken, other.lang, "en-IN",
+            spoken = await sarvam.translate(spoken, other.out_lang, "en-IN",
                                             mode="formal") or spoken
         except Exception:  # noqa: BLE001
             pass
@@ -260,7 +282,7 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
             # that flags a divergence at the same clip as a routine relay sounds
             # like it did not notice.
             audio = await sarvam.tts(
-                spoken, other.lang, languages.speaker(other.lang),
+                spoken, other.out_lang, voice,
                 pace=sarvam.pace_for(
                     sensitive=bool(res.flagged or res.clarification),
                     relaying=not (res.flagged or res.clarification)),
@@ -276,6 +298,11 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
 
     sheet = room.negotiation.sheet()
     speaker_name = room.participants[party_id].name
+    # Append-only turn log in the speaker's own words - see Room.transcript.
+    room.transcript.append({
+        "speaker_id": party_id, "speaker_name": speaker_name,
+        "lang": speaker_lang, "text": transcript, "ts": time.time(),
+    })
     common = {
         "type": "turn", "speaker": party_id, "speaker_name": speaker_name,
         "transcript": transcript, "relay_text": spoken,
