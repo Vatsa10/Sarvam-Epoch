@@ -7,16 +7,18 @@ Flow per turn:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import pathlib
 from typing import Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+import websockets
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import sarvam
+from . import agent, sarvam, session, stt_stream
 from .mediator import Negotiation, Turn, TermState
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -33,33 +35,136 @@ NEG = Negotiation()
 
 
 def _persist() -> None:
-    (SESSIONS / f"{NEG.session_id}.json").write_text(
-        json.dumps(NEG.sheet(), ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
 
 
 def _restore() -> None:
     """Rebuild from the snapshot so `uvicorn --reload` (and a live restart) keep state."""
-    f = SESSIONS / f"{NEG.session_id}.json"
-    if not f.exists():
-        return
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
-    from .mediator import Proposal
-    for t in data.get("terms", []):
-        term = NEG.terms.get(t["key"])
-        if not term:
-            continue
-        term.state = TermState(t["state"])
-        term.agreed_value = t.get("agreed_value")
-        term.divergence_note = t.get("divergence_note")
-        term.proposals = [Proposal(**p) for p in t.get("proposals", [])]
-    NEG.turns = [Turn(**x) for x in data.get("turns", [])]
+    global NEG
+    NEG = session.load(SESSIONS / f"{NEG.session_id}.json", NEG.session_id)
 
 
 _restore()
+
+PANELS: dict[str, set[WebSocket]] = {"vatsa": set(), "sreedev": set()}
+
+
+async def _broadcast(party: str, payload: dict) -> None:
+    """Send to one party's panel. Dead sockets are dropped, never raised - a closed
+    tab must not kill a live turn."""
+    dead = []
+    for ws in PANELS.get(party, set()):
+        try:
+            await ws.send_json(payload)
+        except Exception:  # noqa: BLE001
+            dead.append(ws)
+    for ws in dead:
+        PANELS[party].discard(ws)
+
+
+@app.websocket("/ws/{party}")
+async def ws_party(client: WebSocket, party: str) -> None:
+    if party not in sarvam.PARTIES:
+        await client.close(code=4004)
+        return
+    await client.accept()
+    PANELS[party].add(client)
+
+    me = sarvam.PARTIES[party]
+    other = next(p for p in sarvam.PARTIES if p != party)
+    other_cfg = sarvam.PARTIES[other]
+    url = stt_stream.build_ws_url(me["lang"])
+
+    try:
+        async with websockets.connect(url, additional_headers=stt_stream.WS_HEADERS) as up:
+            async def pump_up() -> None:
+                """Browser PCM -> Sarvam."""
+                while True:
+                    chunk = await client.receive_bytes()
+                    await up.send(json.dumps({
+                        "audio": {"data": _b64(chunk), "encoding": "audio/wav"}
+                    }))
+
+            async def pump_down() -> None:
+                """Sarvam -> notes, and on turn end, the agent."""
+                buffer: list[str] = []
+                async for raw in up:
+                    kind, text = stt_stream.classify(json.loads(raw))
+
+                    if kind == "partial":
+                        note = await _safe_translate(text, other_cfg["lang"], me["lang"])
+                        await _broadcast(other, {"type": "note", "final": False,
+                                                 "from": me["name"], "text": note})
+
+                    elif kind == "final":
+                        buffer.append(text)
+                        note = await _safe_translate(text, other_cfg["lang"], me["lang"])
+                        await _broadcast(other, {"type": "note", "final": True,
+                                                 "from": me["name"], "text": note})
+
+                    elif kind == "turn_end" and buffer:
+                        await _finish_turn(party, " ".join(buffer))
+                        buffer = []
+
+                    elif kind == "error":
+                        await _broadcast(party, {"type": "error", "text": text})
+
+            try:
+                await asyncio.gather(pump_up(), pump_down())
+            except WebSocketDisconnect:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # noqa: BLE001
+        await _broadcast(party, {"type": "error", "text": f"{type(e).__name__}: {e}"})
+    finally:
+        PANELS[party].discard(client)
+
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode()
+
+
+async def _safe_translate(text: str, target: str, source: str) -> str:
+    """Never fail silently: a 429 or timeout renders a visible placeholder so the
+    operator can see a phrase was dropped rather than believing it landed."""
+    try:
+        return await sarvam.translate(text, target, source)
+    except Exception:  # noqa: BLE001
+        return "…"
+
+
+async def _finish_turn(party: str, transcript: str) -> None:
+    """ONE sarvam-30b call. Never on a partial."""
+    me = sarvam.PARTIES[party]
+    other = next(p for p in sarvam.PARTIES if p != party)
+    other_cfg = sarvam.PARTIES[other]
+    idx = len(NEG.turns)
+
+    try:
+        res = await agent.run_turn(NEG, party, me["lang"], transcript, idx)
+    except Exception as e:  # noqa: BLE001
+        for p in sarvam.PARTIES:
+            await _broadcast(p, {"type": "error", "text": f"agent failed: {e}"})
+        return
+
+    spoken = res.clarification or res.summary
+    audio = ""
+    if spoken:
+        try:
+            audio = await sarvam.tts(spoken, other_cfg["lang"], other_cfg["speaker"])
+        except Exception:  # noqa: BLE001
+            audio = ""
+
+    NEG.turns.append(Turn(idx=idx, party=party, lang=me["lang"], transcript=transcript,
+                          relay_text=spoken, interjection=res.clarification))
+    session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
+
+    sheet = NEG.sheet()
+    await _broadcast(other, {"type": "turn", "from": me["name"], "spoken": spoken,
+                             "audio_b64": audio, "flagged": res.flagged, "sheet": sheet})
+    await _broadcast(party, {"type": "state", "flagged": res.flagged, "sheet": sheet})
 
 
 def _sheet_summary() -> str:

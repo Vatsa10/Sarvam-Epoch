@@ -56,14 +56,14 @@
   </header>
 
   <div class="mics">
-    <button class="mic" id="m-vatsa"><b>Vatsa &mdash; Gujarati</b><span>hold to speak</span></button>
-    <button class="mic" id="m-sreedev"><b>Sreedev &mdash; Malayalam</b><span>hold to speak</span></button>
+    <button class="mic" id="m-vatsa"><b>Vatsa &mdash; Gujarati</b><span>tap to go live</span></button>
+    <button class="mic" id="m-sreedev"><b>Sreedev &mdash; Malayalam</b><span>tap to go live</span></button>
     <button class="ghost" id="packet">Lawyer packet &rarr;</button>
     <button class="ghost" id="reset">Reset</button>
   </div>
 
   <div class="banner" id="banner"></div>
-  <div class="status" id="status">Hold a mic button and speak. Release to send.</div>
+  <div class="status" id="status">Tap a mic button to go live. Speech is relayed automatically.</div>
 
   <div class="card"><h2>Term sheet</h2><div id="terms"></div></div>
   <div class="card"><h2>Call log</h2><div class="log" id="log"></div></div>
@@ -72,7 +72,7 @@
 <audio id="player"></audio>
 <script>
 const $ = s => document.querySelector(s);
-let rec = null, chunks = [], busy = false;
+let busy = false;
 
 async function startCapture(onChunk){
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -98,56 +98,47 @@ async function startCapture(onChunk){
   }};
 }
 
-async function micFor(party, btn){
-  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-  const mr = new MediaRecorder(stream, {mimeType: pickMime()});
-  mr.ondataavailable = e => e.data.size && chunks.push(e.data);
-  mr.onstop = async () => {
-    const blob = new Blob(chunks, {type: mr.mimeType}); chunks = [];
-    btn.classList.remove('rec');
-    if (blob.size < 1200) { setStatus('Too short &mdash; hold longer.'); return; }
-    await send(party, blob);
-  };
-  return mr;
-}
-
-function pickMime(){
-  for (const m of ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'])
-    if (MediaRecorder.isTypeSupported(m)) return m;
-  return '';
-}
-
 function setStatus(h){ $('#status').innerHTML = h; }
 
-async function send(party, blob){
-  busy = true; setStatus('Transcribing &amp; reading the term sheet&hellip;');
-  const fd = new FormData();
-  fd.append('audio', blob, 'turn.webm');
-  fd.append('party', party);
-  try{
-    const r = await fetch('/turn', {method:'POST', body:fd});
-    const d = await r.json();
-    if (!r.ok){ setStatus('Error: ' + (d.error || r.status)); busy = false; return; }
-    render(d);
-    if (d.audio_b64){
-      $('#player').src = 'data:audio/wav;base64,' + d.audio_b64;
-      $('#player').play().catch(()=>{});
-    }
-    setStatus(d.flagged.length
-      ? `<b style="color:var(--bad)">Interjected on: ${d.flagged.join(', ')}</b> &mdash; not recorded as agreed.`
-      : `Relayed to ${d.relay_to}.`);
-  }catch(e){ setStatus('Network error: ' + e.message); }
-  busy = false;
+function connect(party){
+  const ws = new WebSocket(`ws://${location.host}/ws/${party}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'note')  showNote(d);
+    if (d.type === 'turn')  { showNote({from:d.from, text:d.spoken, final:true});
+                              if (d.audio_b64) playB64(d.audio_b64);
+                              paint(d.sheet); }
+    if (d.type === 'state') paint(d.sheet);
+    if (d.type === 'error') setStatus('&#9888; ' + esc(d.text));
+  };
+  return ws;
 }
 
-function render(d){
-  const t = document.createElement('div');
-  t.className = 't' + (d.flagged.length ? ' flag' : '');
-  t.innerHTML = `<div class="who">${d.speaker} &middot; turn ${d.turn}</div>
-    <div class="said">${esc(d.transcript)}</div>
-    <div class="rel">&rarr; ${esc(d.relay_text)}</div>`;
-  $('#log').prepend(t);
-  paint(d.sheet);
+function showNote({from, text, final}){
+  const id = 'live-note';
+  let el = document.getElementById(id);
+  if (final || !el){
+    el = document.createElement('div');
+    el.className = 't';
+    if (!final) el.id = id;
+    $('#log').prepend(el);
+  }
+  el.innerHTML = `<div class="who">${esc(from)}</div><div class="said">${esc(text)}</div>`;
+  if (final && el.id === id) el.removeAttribute('id');
+}
+
+function playB64(b64){ $('#player').src = 'data:audio/wav;base64,' + b64; $('#player').play().catch(()=>{}); }
+
+let live = {}; // party -> {stop}
+
+async function goLive(party){
+  const ws = connect(party);
+  await new Promise(r => ws.onopen = r);
+  const cap = await startCapture(chunk => {
+    if (ws.readyState === 1) ws.send(chunk.buffer);
+  });
+  return {async stop(){ await cap.stop(); ws.close(); }};
 }
 
 function paint(sheet){
@@ -175,22 +166,25 @@ const esc = s => (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp;','<':'
 
 for (const party of ['vatsa','sreedev']){
   const btn = $('#m-' + party);
-  const start = async ev => {
-    ev.preventDefault();
-    if (busy || rec) return;
-    rec = await micFor(party, btn);
-    chunks = []; rec.start(); btn.classList.add('rec');
-    setStatus('Listening&hellip; release to send.');
-  };
-  const stop = ev => {
-    ev.preventDefault();
-    if (!rec) return;
-    rec.stop(); rec.stream?.getTracks().forEach(t => t.stop()); rec = null;
-  };
-  btn.addEventListener('mousedown', start);
-  btn.addEventListener('touchstart', start, {passive:false});
-  addEventListener('mouseup', stop);
-  btn.addEventListener('touchend', stop);
+  btn.addEventListener('click', async () => {
+    if (busy) return;
+    if (live[party]){
+      btn.disabled = true;
+      await live[party].stop();
+      delete live[party];
+      btn.classList.remove('rec');
+      btn.disabled = false;
+      setStatus('Stopped listening for ' + party + '.');
+      return;
+    }
+    try{
+      live[party] = await goLive(party);
+      btn.classList.add('rec');
+      setStatus('Listening live for ' + party + '&hellip;');
+    }catch(e){
+      setStatus('Mic error: ' + esc(e.message));
+    }
+  });
 }
 
 $('#packet').onclick = () => window.open('/packet', '_blank');
