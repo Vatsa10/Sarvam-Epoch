@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { LogEntry, Sheet } from "@/lib/types";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
 
 // The lawyer is a third party to the call and may read a third language again.
 const LAWYER_LANGS = [
