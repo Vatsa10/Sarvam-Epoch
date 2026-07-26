@@ -366,6 +366,40 @@ tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}}
 deliberately not resolved by the system &mdash; they need a human decision first.</p>""")
 
 
+@app.post("/replay/{scenario}")
+async def replay(scenario: str) -> JSONResponse:
+    """Run a scripted negotiation end-to-end with no microphone.
+
+    This is the JTBD evidence path: three of these, zero keystrokes, diffed against
+    the scenario's own expected states.
+    """
+    f = ROOT / "fixtures" / f"{scenario}.json"
+    if not f.exists():
+        return JSONResponse({"error": f"no scenario {scenario}"}, status_code=404)
+
+    spec = json.loads(f.read_text(encoding="utf-8"))
+    global NEG
+    NEG = Negotiation(f"replay_{scenario}")
+
+    for i, t in enumerate(spec["turns"]):
+        res = await agent.run_turn(NEG, t["party"], sarvam.PARTIES[t["party"]]["lang"],
+                                   t["transcript"], i)
+        NEG.turns.append(Turn(idx=i, party=t["party"],
+                              lang=sarvam.PARTIES[t["party"]]["lang"],
+                              transcript=t["transcript"],
+                              relay_text=res.summary, interjection=res.clarification))
+
+    session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
+    sheet = NEG.sheet()
+    actual = {t["key"]: t["state"] for t in sheet["terms"]}
+    mismatches = [
+        {"term": k, "expected": v, "actual": actual.get(k)}
+        for k, v in spec["expected"].items() if actual.get(k) != v
+    ]
+    return JSONResponse({"scenario": spec["name"], "expected_ok": not mismatches,
+                         "mismatches": mismatches, "sheet": sheet})
+
+
 @app.post("/reset")
 async def reset() -> JSONResponse:
     global NEG

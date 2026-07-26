@@ -1,0 +1,10 @@
+{
+  "name": "maintenance divergence",
+  "turns": [
+    {"party": "vatsa",   "transcript": "Bhaade pandar hajaar rupiya rahese."},
+    {"party": "sreedev", "transcript": "Sari, pathinanju ayiram OK aanu."},
+    {"party": "vatsa",   "transcript": "Maintenance alag thi aapvanu rahese."},
+    {"party": "sreedev", "transcript": "Sari, maintenance separate, apo 500 rupa."}
+  ],
+  "expected": {"rent": "AGREED", "maintenance": "DIVERGED"}
+}
