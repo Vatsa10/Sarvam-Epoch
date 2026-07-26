@@ -338,9 +338,14 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     # Who these two are, what they each came for, and what they settled the last
     # time they spoke. Best-effort by construction - no history must ever block a
     # live turn.
+    # HARD TIMEOUT, not just best-effort. party_context does a pgvector query and an
+    # OpenAI embedding, and it sits between the speaker finishing and the listener
+    # hearing anything. Useful context is worth ~1.5s; it is never worth a stalled
+    # call, so a slow lookup is dropped rather than waited on.
     try:
-        preamble = await rooms.party_context(room, gloss=gloss or None)
-    except Exception:  # noqa: BLE001
+        preamble = await asyncio.wait_for(
+            rooms.party_context(room, gloss=gloss or None), timeout=1.5)
+    except (Exception, asyncio.TimeoutError):  # noqa: BLE001
         preamble = ""
 
     try:
@@ -353,9 +358,11 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
                                    transcript, idx, gloss=gloss or None,
                                    preamble=preamble, parties=parties)
     except Exception as e:  # noqa: BLE001
-        for pid in room.participants:
-            await _send(room.code, pid, {"type": "error", "text": f"agent failed: {e}"})
-        return
+        # The agent failing must not swallow the turn. The two people are mid-call:
+        # relaying what was said with no sheet update is far better than silence
+        # plus an error code, which is what used to happen.
+        print(f"[meet] agent failed on turn {idx}: {type(e).__name__}: {e}")
+        res = agent.TurnResult(summary=gloss or transcript)
 
     # res.summary is plain ENGLISH by design (see agent.SYSTEM). Feeding it straight
     # to Bulbul with an Indian target language makes the listener hear English read
