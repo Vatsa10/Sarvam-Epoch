@@ -153,9 +153,10 @@ function paint(sheet){
   }).join('');
 
   const b = $('#banner');
-  if (sheet.blocked.length){
+  if (!sheet.drafting_safe){
+    const notReady = sheet.terms.filter(t => t.state !== 'AGREED' && t.state !== 'OPEN').map(t => t.key);
     b.className = 'banner stop';
-    b.innerHTML = `Cannot draft: ${sheet.blocked.join(', ')} &mdash; both sides said yes to different things, or hedged.`;
+    b.innerHTML = `Cannot draft: ${(sheet.blocked.length ? sheet.blocked : notReady).join(', ')} &mdash; both sides said yes to different things, hedged, or a term is still only proposed by one side.`;
   } else if (sheet.terms.some(t => t.state === 'AGREED')){
     b.className = 'banner ok';
     b.textContent = 'All discussed terms agreed. Safe to send to the lawyer.';

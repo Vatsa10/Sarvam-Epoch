@@ -122,6 +122,7 @@ class Negotiation:
             elif prop.stance == "reject":
                 term.state = TermState.REJECTED
                 term.agreed_value = None
+                term.divergence_note = None
 
             elif prop.stance == "accept":
                 if prior is None or prior.stance in ("hedge", "reject"):
@@ -132,6 +133,7 @@ class Negotiation:
                 elif _same(prior.value, prop.value):
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value
+                    term.divergence_note = None
                 else:
                     # BOTH SAID YES. TO DIFFERENT THINGS. This is the whole product.
                     term.state = TermState.DIVERGED
@@ -148,6 +150,7 @@ class Negotiation:
                 else:
                     term.state = TermState.PROPOSED
                 term.agreed_value = None
+                term.divergence_note = None
 
         return needs_interjection
 

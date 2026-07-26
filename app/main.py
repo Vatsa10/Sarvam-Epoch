@@ -193,6 +193,8 @@ async def _finish_turn(party: str, transcript: str) -> None:
             return
 
         spoken = res.clarification or res.summary
+        if spoken:
+            spoken = await _safe_translate(spoken, other_cfg["lang"], "en-IN") or spoken
         NEG.turns.append(Turn(idx=idx, party=party, lang=me["lang"], transcript=transcript,
                               relay_text=spoken, interjection=res.clarification))
         session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
@@ -337,10 +339,11 @@ async def packet() -> HTMLResponse:
     blocked = s["blocked"]
     banner = (
         "<div class='ok'>All discussed terms AGREED &mdash; safe to draft.</div>"
-        if not blocked else
+        if s["drafting_safe"] else
         "<div class='stop'><b>DO NOT DRAFT THESE CLAUSES.</b> Not agreed: "
-        + ", ".join(blocked) +
-        ". Both parties said yes to different things, or gave a soft non-answer.</div>"
+        + ", ".join(blocked or [t["key"] for t in s["terms"] if t["state"] not in ("AGREED", "OPEN")]) +
+        ". Both parties said yes to different things, gave a soft non-answer, or a "
+        "term is still only proposed by one side.</div>"
     )
     return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
 <title>NyayBandhan &mdash; Lawyer Packet</title><style>
