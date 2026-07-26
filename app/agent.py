@@ -61,7 +61,37 @@ detecting that is your entire job. Do not smooth it over.
 A hedge ("we'll see", "dekhte hain", "nokkaam", "joiye chhe") is NOT an accept. Never
 upgrade a hedge.
 
-Then write a one-sentence plain-English summary of what the speaker said."""
+Then write a one-sentence plain-English summary of what the speaker said.
+
+ATTRIBUTION IS NOT OPTIONAL. The utterance you are given belongs to the speaker named in
+SPEAKING NOW. Never record a stance on behalf of the other party. If the speaker refers to
+what the other party said earlier, that is context for interpreting THEIR words - it is not
+a new statement by the other party. A speaker cannot accept their own proposal; if they
+restate their own position, that is `propose`, not `accept`."""
+
+
+def build_context(neg: Negotiation, party: str, transcript: str) -> str:
+    """Everything the agent needs to attribute this utterance correctly."""
+    from . import sarvam
+    me = sarvam.PARTIES[party]
+    other_id = next(p for p in sarvam.PARTIES if p != party)
+    other = sarvam.PARTIES[other_id]
+
+    sheet = "\n".join(
+        f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
+        for t in neg.terms.values() if t.state is not TermState.OPEN
+    ) or "(nothing discussed yet)"
+
+    return (
+        f"PARTIES\n"
+        f"- {me['name']} speaks {me['label']}\n"
+        f"- {other['name']} speaks {other['label']}\n\n"
+        f"SPEAKING NOW: {me['name']} ({me['label']}). "
+        f"Everything below is {me['name']}'s words, nobody else's.\n\n"
+        f"CONVERSATION SO FAR\n{neg.transcript_history()}\n\n"
+        f"TERM SHEET\n{sheet}\n\n"
+        f"THIS UTTERANCE ({me['name']}):\n{transcript}"
+    )
 
 
 @dataclass
@@ -134,14 +164,9 @@ def _parse_tool_calls(message: dict) -> list[dict]:
 async def run_turn(neg: Negotiation, party: str, lang: str,
                    transcript: str, turn_idx: int) -> TurnResult:
     """ONE sarvam-30b call per completed turn. Never called on a partial."""
-    sheet = "\n".join(
-        f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
-        for t in neg.terms.values() if t.state is not TermState.OPEN
-    ) or "(nothing discussed yet)"
-
     message = await llm.complete_with_tools(
         system=SYSTEM,
-        user=f"Current term sheet:\n{sheet}\n\nSpeaker ({party}, {lang}) said:\n{transcript}",
+        user=build_context(neg, party, transcript),
         tools=TOOLS,
     )
     res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message), turn_idx)

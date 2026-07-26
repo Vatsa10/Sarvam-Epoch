@@ -93,6 +93,51 @@ def test_unknown_tool_is_ignored_not_crashed():
     assert res.flagged == []
 
 
+def test_context_names_the_current_speaker_and_the_listener():
+    from app.agent import build_context
+    from app.mediator import Negotiation
+    ctx = build_context(Negotiation(), "vatsa", "bhaade pandar hajaar")
+    assert "Vatsa" in ctx and "Sreedev" in ctx
+    assert "Gujarati" in ctx and "Malayalam" in ctx
+    assert "bhaade pandar hajaar" in ctx
+
+
+def test_context_includes_prior_turns_with_attribution():
+    from app.agent import build_context
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    n.turns.append(Turn(idx=0, party="sreedev", lang="ml-IN",
+                        transcript="pathinanju sari", relay_text="", interjection=None))
+    ctx = build_context(n, "vatsa", "haan")
+    assert "pathinanju sari" in ctx
+    assert "Sreedev" in ctx
+
+
+def test_context_marks_the_speaker_unambiguously():
+    """The prompt must state whose words these are, in a way that cannot be read
+    as the other party speaking."""
+    from app.agent import build_context
+    from app.mediator import Negotiation
+    ctx = build_context(Negotiation(), "sreedev", "pathinanju sari")
+    speaking = ctx.split("SPEAKING NOW:")[1].split("\n")[0]
+    assert "Sreedev" in speaking
+    assert "Vatsa" not in speaking
+
+
+def test_context_history_does_not_leak_into_the_current_utterance_block():
+    """Prior turns and the current utterance must be visibly separate sections, or
+    the model can read old words as newly spoken."""
+    from app.agent import build_context
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    n.turns.append(Turn(idx=0, party="sreedev", lang="ml-IN",
+                        transcript="OLDWORDS", relay_text="", interjection=None))
+    ctx = build_context(n, "vatsa", "NEWWORDS")
+    tail = ctx.split("THIS UTTERANCE")[1]
+    assert "NEWWORDS" in tail
+    assert "OLDWORDS" not in tail
+
+
 if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_"):

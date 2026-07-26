@@ -79,6 +79,47 @@ def test_restart_survives_replay():
     assert n.terms["rent"].proposals[0].verbatim == "baar"
 
 
+def test_transcript_history_attributes_each_speaker():
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    n.turns.append(Turn(idx=0, party="vatsa", lang="gu-IN",
+                        transcript="bhaade pandar hajaar", relay_text="", interjection=None))
+    n.turns.append(Turn(idx=1, party="sreedev", lang="ml-IN",
+                        transcript="pathinanju sari", relay_text="", interjection=None))
+    h = n.transcript_history()
+    assert "Vatsa" in h and "Sreedev" in h
+    assert "pandar hajaar" in h and "pathinanju" in h
+    assert h.index("Vatsa") < h.index("Sreedev"), "history must preserve turn order"
+
+
+def test_transcript_history_respects_limit():
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    for i in range(10):
+        n.turns.append(Turn(idx=i, party="vatsa", lang="gu-IN",
+                            transcript=f"utterance{i}", relay_text="", interjection=None))
+    h = n.transcript_history(limit=3)
+    assert "utterance9" in h and "utterance6" not in h
+
+
+def test_transcript_history_empty_is_safe():
+    from app.mediator import Negotiation
+    assert isinstance(Negotiation().transcript_history(), str)
+
+
+def test_cannot_agree_with_your_own_proposal():
+    """A speaker accepting their OWN prior proposal is not agreement - there is no
+    counterparty. Guards the single worst misattribution the product can make."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "haan theek", "stance": "accept"}], 1)
+    assert n.terms["rent"].state is not TermState.AGREED
+    assert n.terms["rent"].agreed_value is None
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

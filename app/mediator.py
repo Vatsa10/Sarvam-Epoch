@@ -149,6 +149,22 @@ class Negotiation:
 
         return needs_interjection
 
+    def transcript_history(self, limit: int = 6) -> str:
+        """Recent turns, each attributed to a named speaker.
+
+        Attribution is the point: the agent must never credit one party with the
+        other's words, because that becomes a wrong clause in a signed document.
+        """
+        from . import sarvam
+        recent = self.turns[-limit:] if limit else self.turns
+        lines = []
+        for t in recent:
+            cfg = sarvam.PARTIES.get(t.party, {})
+            who = cfg.get("name", t.party)
+            lang = cfg.get("label", t.lang)
+            lines.append(f"[turn {t.idx}] {who} ({lang}): {t.transcript}")
+        return "\n".join(lines) or "(no prior turns - this is the first)"
+
     def _other_party(self, party: str) -> str:
         return next(p for p in sarvam.PARTIES if p != party)
 
