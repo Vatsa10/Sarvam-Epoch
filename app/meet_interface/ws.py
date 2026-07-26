@@ -30,7 +30,7 @@ import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .. import agent, sarvam, stt_stream
-from ..mediator import Turn
+from ..mediator import TermState, Turn
 from . import languages, rooms
 
 router = APIRouter()
@@ -232,6 +232,18 @@ async def _handle_control(room: rooms.Room, me: rooms.Participant, kind: str, st
     elif kind == "talk_done":
         if room.turn_holder != me.party_id or not room.floor_open:
             return
+        # Saaras emits its final AFTER the last audio frame lands, so closing
+        # the floor the instant Done is pressed drops that final in pump_down
+        # and the whole turn silently disappears. Hold the floor open until a
+        # final arrives, then give a short grace for a trailing second one.
+        # ponytail: fixed 6s ceiling; make it adaptive only if a long turn
+        # is observed to time out.
+        for _ in range(24):
+            if state["buffer"]:
+                break
+            await asyncio.sleep(0.25)
+        if state["buffer"]:
+            await asyncio.sleep(0.6)
         room.floor_open = False
         transcript = " ".join(state["buffer"]).strip()
         state["buffer"] = []
@@ -348,8 +360,10 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
 
     # A DEADLOCK IS A MOMENT OF FRICTION, NOT JUST A RED ROW. Flagging a term and
     # stopping there leaves two people who believe they agreed staring at a colour.
-    # Give each side the same three ordered options, in their own language, so the
-    # call has somewhere to go.
+    # Round 1 just lets the flag speak for itself - it may still resolve on its own.
+    # Round 2 gives the three ordered options. Round 3 forces each side to name ONE
+    # number. Past the cap, the mediator stops relaying the same fight and parks it
+    # so the rest of the call can move.
     if res.flagged:
         for key in res.flagged[:1]:
             term = room.negotiation.terms.get(key)
@@ -357,24 +371,57 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
                 continue
             mine = term.latest_by(party_id)
             theirs = term.latest_by(other.party_id) if other is not None else None
-            opts = (
-                f"You two have not actually agreed on {key}. "
-                f"You said {mine.value if mine else 'nothing yet'}; "
-                f"they said {theirs.value if theirs else 'nothing yet'}. "
-                f"Three ways forward: 1) one of you restates a single number you both "
-                f"repeat back, 2) split the difference and say the exact figure, or "
-                f"3) park {key} and settle the other terms first."
-            )
+            mine_val = mine.value if mine else "nothing yet"
+            theirs_val = theirs.value if theirs else "nothing yet"
+
+            text = None
+            parked = False
+            if room.negotiation.deadlocked(key):
+                reason = f"no agreement after {term.attempts} rounds"
+                if room.negotiation.park(key, reason):
+                    await rooms.persist_sheet(room)
+                    parked = True
+                    text = (
+                        f"{key} is being set aside for now - it is NOT agreed. "
+                        f"One side said {mine_val}, the other said {theirs_val}. "
+                        f"Come back to it once the rest of the lease is settled."
+                    )
+                    if all(t.state in (TermState.AGREED, TermState.PARKED,
+                                        TermState.REJECTED)
+                           for t in room.negotiation.terms.values()):
+                        text += " Every term is now settled or parked - the negotiation is complete and the packet is ready."
+            elif term.attempts >= 3:
+                text = (
+                    f"You two have not actually agreed on {key}. "
+                    f"You said {mine_val}; they said {theirs_val}. "
+                    f"Please each state ONE number for {key}, right now, so this can close."
+                )
+            elif term.attempts == 2:
+                text = (
+                    f"You two have not actually agreed on {key}. "
+                    f"You said {mine_val}; they said {theirs_val}. "
+                    f"Three ways forward: 1) one of you restates a single number you both "
+                    f"repeat back, 2) split the difference and say the exact figure, or "
+                    f"3) park {key} and settle the other terms first."
+                )
+            # attempts == 1 (or 0, e.g. a fresh divergence): relay + flag only, no
+            # extra message yet - the sheet already shows red, that is enough.
+
+            if text is None:
+                continue
+
             for pid, p_obj in room.participants.items():
-                text = opts
+                out = text
                 if p_obj.out_lang != "en-IN":
                     try:
-                        text = await sarvam.translate(opts, p_obj.out_lang, "en-IN",
-                                                      mode="formal") or opts
+                        out = await sarvam.translate(text, p_obj.out_lang, "en-IN",
+                                                      mode="formal") or text
                     except Exception:  # noqa: BLE001
                         pass
-                await _send(room.code, pid, {"type": "resolve", "term": key,
-                                             "text": text})
+                frame = {"type": "resolve", "term": key, "text": out}
+                if parked:
+                    frame["parked"] = True
+                await _send(room.code, pid, frame)
 
     if spoken and other is not None and voice:
         try:
