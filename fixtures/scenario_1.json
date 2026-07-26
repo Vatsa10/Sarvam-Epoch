@@ -1,10 +1,25 @@
 {
   "name": "maintenance divergence",
   "turns": [
-    {"party": "vatsa",   "transcript": "Bhaade pandar hajaar rupiya rahese."},
-    {"party": "sreedev", "transcript": "Sari, pathinanju ayiram OK aanu."},
-    {"party": "vatsa",   "transcript": "Maintenance alag thi aapvanu rahese."},
-    {"party": "sreedev", "transcript": "Sari, maintenance separate, apo 500 rupa."}
+    {
+      "party": "vatsa",
+      "transcript": "ભાડું પંદર હજાર રૂપિયા રહેશે."
+    },
+    {
+      "party": "sreedev",
+      "transcript": "പതിനയ്യായിരം ശരിയാണ്, സമ്മതം."
+    },
+    {
+      "party": "vatsa",
+      "transcript": "મેન્ટેનન્સ અલગથી આપવાનું રહેશે, જે પણ ખર્ચ થાય એ પ્રમાણે."
+    },
+    {
+      "party": "sreedev",
+      "transcript": "ശരി, മെയിന്റനൻസ് വേറെ. മാസം 500 രൂപ ഫിക്സഡ്."
+    }
   ],
-  "expected": {"rent": "AGREED", "maintenance": "DIVERGED"}
+  "expected": {
+    "rent": "AGREED",
+    "maintenance": "DIVERGED"
+  }
 }

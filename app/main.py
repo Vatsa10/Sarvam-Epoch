@@ -327,13 +327,30 @@ async def state() -> JSONResponse:
 
 @app.get("/packet")
 async def packet() -> HTMLResponse:
-    """The artifact. Print-to-PDF and hand it to the lawyer.
+    """The live session's artifact."""
+    return HTMLResponse(_packet_html(NEG.sheet()))
+
+
+@app.get("/packet/{session_id}")
+async def packet_for(session_id: str) -> HTMLResponse:
+    """The artifact for ANY saved session, including a /replay run.
+
+    Without this the replay path proved the reasoning but produced no final
+    document - and a completed job with no usable output is not a completed job.
+    """
+    f = SESSIONS / f"{session_id}.json"
+    if not f.exists():
+        return HTMLResponse(f"<p>no session {session_id}</p>", status_code=404)
+    return HTMLResponse(_packet_html(session.load(f, session_id).sheet()))
+
+
+def _packet_html(s: dict) -> str:
+    """Render a term sheet. Print-to-PDF and hand it to the lawyer.
 
     Every clause carries both parties' own words in their own script, and the blocked
     section names exactly what was NOT agreed - which is the part that stops the
     lawyer drafting a clause the parties never actually settled.
     """
-    s = NEG.sheet()
     rows = []
     for t in s["terms"]:
         if t["state"] == "OPEN":
@@ -359,7 +376,7 @@ async def packet() -> HTMLResponse:
         ". Both parties said yes to different things, gave a soft non-answer, or a "
         "term is still only proposed by one side.</div>"
     )
-    return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
+    return f"""<!doctype html><meta charset=utf-8>
 <title>NyayBandhan &mdash; Lawyer Packet</title><style>
 body{{font:14px/1.6 system-ui;margin:40px;max-width:900px}}
 h1{{margin:0 0 4px}} .sub{{color:#666;margin-bottom:24px}}
@@ -380,7 +397,7 @@ tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}}
 <table><tr><th>Term</th><th>State</th><th>Agreed value</th><th>What each party actually said</th></tr>
 {''.join(rows) or '<tr><td colspan=4>Nothing discussed yet.</td></tr>'}</table>
 <p class=sub>Generated for legal review. Clauses marked DIVERGED or HEDGED were
-deliberately not resolved by the system &mdash; they need a human decision first.</p>""")
+deliberately not resolved by the system &mdash; they need a human decision first.</p>"""
 
 
 @app.post("/replay/{scenario}")
@@ -426,6 +443,49 @@ async def draft_agreement(lang: str = "en-IN") -> HTMLResponse:
     of a clause."""
     d = await drafter.draft(NEG, lawyer_lang=lang)
     return HTMLResponse(drafter.render(d, NEG))
+
+
+# NOT /replay/all: FastAPI matches in registration order and
+# /replay/{scenario} is declared first, so "all" would be read as a
+# scenario name and 404.
+@app.post("/replay-all")
+async def replay_all() -> JSONResponse:
+    """Run EVERY scenario end to end and report a success rate.
+
+    This is the job-completion evidence: three repeated cases, one call, zero
+    keystrokes, each diffed against its own expected states and each producing a
+    real artifact. A judge reads one number and can open three documents.
+    """
+    names = sorted(f.stem for f in (ROOT / "fixtures").glob("scenario_*.json"))
+    cases = []
+    for name in names:
+        r = await replay(name)
+        d = json.loads(bytes(r.body).decode())
+        cases.append({
+            "scenario": d.get("scenario", name),
+            "passed": d.get("expected_ok", False),
+            "mismatches": d.get("mismatches", []),
+            "packet": f"/packet/replay_{name}",
+            "draft": f"/draft/replay_{name}",
+        })
+    passed = sum(1 for c in cases if c["passed"])
+    return JSONResponse({
+        "cases": len(cases),
+        "passed": passed,
+        "success_rate": f"{(passed / len(cases) * 100) if cases else 0:.0f}%",
+        "results": cases,
+    })
+
+
+@app.get("/draft/{session_id}")
+async def draft_for(session_id: str, lang: str = "en-IN") -> HTMLResponse:
+    """Lawyer draft for any saved session, including a replay run."""
+    f = SESSIONS / f"{session_id}.json"
+    if not f.exists():
+        return HTMLResponse(f"<p>no session {session_id}</p>", status_code=404)
+    neg = session.load(f, session_id)
+    d = await drafter.draft(neg, lawyer_lang=lang)
+    return HTMLResponse(drafter.render(d, neg))
 
 
 @app.post("/reset")

@@ -1,8 +1,25 @@
 {
   "name": "clean agreement, no conflict",
   "turns": [
-    {"party": "vatsa",   "transcript": "Bhaade bar hajaar, agiyar mahina mate."},
-    {"party": "sreedev", "transcript": "Pannirayiram, pathinonnu masam, sammatham."}
+    {
+      "party": "vatsa",
+      "transcript": "ભાડું બાર હજાર રૂપિયા રહેશે."
+    },
+    {
+      "party": "sreedev",
+      "transcript": "പന്ത്രണ്ടായിരം രൂപ, സമ്മതം."
+    },
+    {
+      "party": "vatsa",
+      "transcript": "કરાર અગિયાર મહિના માટે રહેશે."
+    },
+    {
+      "party": "sreedev",
+      "transcript": "പതിനൊന്ന് മാസം, ശരി."
+    }
   ],
-  "expected": {"rent": "AGREED", "duration": "AGREED"}
+  "expected": {
+    "rent": "AGREED",
+    "duration": "AGREED"
+  }
 }

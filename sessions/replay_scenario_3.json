@@ -1,0 +1,137 @@
+{
+  "session_id": "replay_scenario_3",
+  "drafting_safe": true,
+  "terms": [
+    {
+      "key": "rent",
+      "description": "Monthly rent amount",
+      "state": "AGREED",
+      "agreed_value": "12000",
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": [
+        {
+          "party": "vatsa",
+          "value": "12000",
+          "verbatim": "ભાડું બાર હજાર રૂપિયા રહેશે.",
+          "lang": "gu-IN",
+          "stance": "accept",
+          "turn": 0,
+          "ts": 1785056669.007168
+        },
+        {
+          "party": "sreedev",
+          "value": "12000",
+          "verbatim": "പന്ത്രണ്ടായിരം രൂപ, സമ്മതം.",
+          "lang": "ml-IN",
+          "stance": "accept",
+          "turn": 1,
+          "ts": 1785056670.5363572
+        }
+      ]
+    },
+    {
+      "key": "deposit",
+      "description": "Security deposit amount",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "duration",
+      "description": "Lease duration",
+      "state": "AGREED",
+      "agreed_value": "11",
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": [
+        {
+          "party": "vatsa",
+          "value": "11",
+          "verbatim": "કરાર અગિયાર મહિના માટે રહેશે.",
+          "lang": "gu-IN",
+          "stance": "accept",
+          "turn": 2,
+          "ts": 1785056671.7263768
+        },
+        {
+          "party": "sreedev",
+          "value": "11",
+          "verbatim": "പതിനൊന്ന് മാസം, ശരി.",
+          "lang": "ml-IN",
+          "stance": "accept",
+          "turn": 3,
+          "ts": 1785056673.008202
+        }
+      ]
+    },
+    {
+      "key": "maintenance",
+      "description": "Who pays maintenance, and is it fixed or actual",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "notice_period",
+      "description": "Notice period to vacate",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "painting",
+      "description": "Who bears repainting cost at exit",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    }
+  ],
+  "turns": [
+    {
+      "idx": 0,
+      "party": "vatsa",
+      "lang": "gu-IN",
+      "transcript": "ભાડું બાર હજાર રૂપિયા રહેશે.",
+      "relay_text": "The fare will be twelve thousand rupees.",
+      "interjection": null,
+      "ts": 1785056669.007187
+    },
+    {
+      "idx": 1,
+      "party": "sreedev",
+      "lang": "ml-IN",
+      "transcript": "പന്ത്രണ്ടായിരം രൂപ, സമ്മതം.",
+      "relay_text": "Twelve thousand, please.",
+      "interjection": null,
+      "ts": 1785056670.5363917
+    },
+    {
+      "idx": 2,
+      "party": "vatsa",
+      "lang": "gu-IN",
+      "transcript": "કરાર અગિયાર મહિના માટે રહેશે.",
+      "relay_text": "The contract will be for eleven months.",
+      "interjection": null,
+      "ts": 1785056671.7263896
+    },
+    {
+      "idx": 3,
+      "party": "sreedev",
+      "lang": "ml-IN",
+      "transcript": "പതിനൊന്ന് മാസം, ശരി.",
+      "relay_text": "Still undiscussed: deposit, maintenance, notice_period, painting",
+      "interjection": null,
+      "ts": 1785056673.0082238
+    }
+  ],
+  "blocked": []
+}

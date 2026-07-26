@@ -1,0 +1,102 @@
+{
+  "session_id": "replay_scenario_2",
+  "drafting_safe": false,
+  "terms": [
+    {
+      "key": "rent",
+      "description": "Monthly rent amount",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "deposit",
+      "description": "Security deposit amount",
+      "state": "HEDGED",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": [
+        {
+          "party": "vatsa",
+          "value": "50000",
+          "verbatim": "ડિપોઝિટ પચાસ હજાર રૂપિયા જોઈએ છે.",
+          "lang": "gu-IN",
+          "stance": "accept",
+          "turn": 0,
+          "ts": 1785056666.0718536
+        },
+        {
+          "party": "sreedev",
+          "value": "0",
+          "verbatim": "അത്... നമുക്ക് നോക്കാം, പിന്നെ പറയാം.",
+          "lang": "ml-IN",
+          "stance": "hedge",
+          "turn": 1,
+          "ts": 1785056667.3842118
+        }
+      ]
+    },
+    {
+      "key": "duration",
+      "description": "Lease duration",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "maintenance",
+      "description": "Who pays maintenance, and is it fixed or actual",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "notice_period",
+      "description": "Notice period to vacate",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    },
+    {
+      "key": "painting",
+      "description": "Who bears repainting cost at exit",
+      "state": "OPEN",
+      "agreed_value": null,
+      "divergence_note": null,
+      "doubt": null,
+      "proposals": []
+    }
+  ],
+  "turns": [
+    {
+      "idx": 0,
+      "party": "vatsa",
+      "lang": "gu-IN",
+      "transcript": "ડિપોઝિટ પચાસ હજાર રૂપિયા જોઈએ છે.",
+      "relay_text": "Deposit of fifty thousand rupees is required.",
+      "interjection": null,
+      "ts": 1785056666.071876
+    },
+    {
+      "idx": 1,
+      "party": "sreedev",
+      "lang": "ml-IN",
+      "transcript": "അത്... നമുക്ക് നോക്കാം, പിന്നെ പറയാം.",
+      "relay_text": "That... we'll have to watch and see then.",
+      "interjection": null,
+      "ts": 1785056667.3842273
+    }
+  ],
+  "blocked": [
+    "deposit"
+  ]
+}

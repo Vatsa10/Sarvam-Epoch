@@ -209,7 +209,13 @@ class Negotiation:
             # a term update carrying no value would otherwise land as a PROPOSED row
             # with a blank amount - a phantom position nobody actually took, which
             # then contaminates every later comparison. Drop it.
-            if not str(u.get("value", "")).strip():
+            #
+            # EXCEPT a hedge, which is meaningful precisely BECAUSE it carries no
+            # value: "dekhte hain" is a non-answer about a real term, and dropping it
+            # would silently lose the thing this product refuses to treat as
+            # agreement.
+            if (not str(u.get("value", "")).strip()
+                    and u.get("stance") != "hedge"):
                 continue
 
             term = self.terms[key]
@@ -317,6 +323,43 @@ class Negotiation:
                 term.divergence_note = None
 
         return needs_interjection
+
+    def copied_the_other_side(self, key: str, party: str, gloss: str = "") -> bool:
+        """True when this party's recorded value looks copied from the other side.
+
+        The model is told to record what the ACCEPTING speaker means, not what was
+        proposed to them. It does not always: asked to fold "maintenance separate,
+        whatever the cost" against "500 rupees a month", it recorded BOTH as
+        "actual" — flattening a real divergence into agreement, which is the one
+        outcome this product exists to prevent.
+
+        Detected by evidence rather than by trusting the label: if the speaker's own
+        words (or their English gloss) carry a number that is nowhere in the value
+        recorded for them, the value did not come from them.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        mine = term.latest_by(party)
+        other = term.latest_by(self._other_party(party))
+        if mine is None or other is None or not _same(mine.value, other.value):
+            return False
+        said = "".join(c for c in (mine.verbatim + " " + gloss) if c.isdigit())
+        recorded = "".join(c for c in mine.value if c.isdigit())
+        return bool(said) and said != recorded
+
+    def values_match(self, key: str) -> bool:
+        """True when both parties' latest values are the same thing.
+
+        If they match, it is agreement — full stop. A divergence flag on identical
+        values is the model narrating a disagreement that the record contradicts,
+        and it was observed doing exactly that on two parties who both said 15000.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        a, b = (term.latest_by(p) for p in sarvam.PARTIES)
+        return a is not None and b is not None and _same(a.value, b.value)
 
     def is_open_haggle(self, key: str) -> bool:
         """True when the two sides' latest figures are both bare numbers that differ.

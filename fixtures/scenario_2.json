@@ -1,8 +1,16 @@
 {
   "name": "polite non-answer on deposit",
   "turns": [
-    {"party": "vatsa",   "transcript": "Deposit pachaas hajaar joiye chhe."},
-    {"party": "sreedev", "transcript": "Aa... nammal nokkaam, parayaam."}
+    {
+      "party": "vatsa",
+      "transcript": "ડિપોઝિટ પચાસ હજાર રૂપિયા જોઈએ છે."
+    },
+    {
+      "party": "sreedev",
+      "transcript": "അത്... നമുക്ക് നോക്കാം, പിന്നെ പറയാം."
+    }
   ],
-  "expected": {"deposit": "HEDGED"}
+  "expected": {
+    "deposit": "HEDGED"
+  }
 }

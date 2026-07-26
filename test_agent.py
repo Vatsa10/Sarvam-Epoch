@@ -98,19 +98,26 @@ def test_flag_divergence_needs_existing_proposals():
 def test_flag_divergence_wins_over_update_term_in_same_turn():
     """update_term is buffered and applied via neg.apply() AFTER the loop, while
     flag_divergence used to mutate state inline - letting a same-turn update_term
-    silently overwrite the flag. flag_divergence must always win."""
+    silently overwrite the flag. flag_divergence must always win.
+
+    Originally written with rent 15000 vs 15000. That was wrong: identical values
+    are agreement, and values_match now refuses a flag that the record contradicts.
+    Ordering is tested with a real divergence instead - describable the same way
+    ("separate"), meaning different things.
+    """
     neg = Negotiation()
     apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
-        "term": "rent", "value": "15000", "verbatim": "pandar hajaar", "stance": "propose"}}], 0)
+        "term": "maintenance", "value": "actual", "verbatim": "alag", "stance": "propose"}}], 0)
     res = apply_tool_calls(neg, "sreedev", "ml-IN", [
         {"name": "update_term", "arguments": {
-            "term": "rent", "value": "15000", "verbatim": "pathinanju sari", "stance": "accept"}},
+            "term": "maintenance", "value": "fixed 500", "verbatim": "500 rupa",
+            "stance": "accept"}},
         {"name": "flag_divergence", "arguments": {
-            "term": "rent", "note": "actually meant different values"}},
+            "term": "maintenance", "note": "actually meant different values"}},
     ], 1)
-    assert neg.terms["rent"].state is TermState.DIVERGED
-    assert neg.terms["rent"].agreed_value is None
-    assert "rent" in res.flagged
+    assert neg.terms["maintenance"].state is TermState.DIVERGED
+    assert neg.terms["maintenance"].agreed_value is None
+    assert "maintenance" in res.flagged
 
 
 def test_unknown_tool_is_ignored_not_crashed():
@@ -246,6 +253,30 @@ def test_is_open_haggle_only_fires_on_two_bare_numbers():
     n.apply("sreedev", "ml-IN", [{"term": "deposit", "value": "50000",
             "verbatim": "50k", "stance": "accept"}], 3)
     assert not n.is_open_haggle("deposit"), "same number is agreement, not haggling"
+
+
+
+def test_flag_divergence_ignored_when_both_said_the_same_value():
+    """Seen live: both parties said 15000 and the model called flag_divergence
+    anyway. Identical values are agreement - the record contradicts the flag."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "15000", "verbatim": "pandar hajaar",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "sreedev", "ml-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "rent", "value": "15000", "verbatim": "pathinayyayiram",
+            "stance": "accept"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "rent", "note": "they mean different amounts"}},
+    ], 1)
+    t = neg.terms["rent"]
+    assert t.state is TermState.AGREED, f"identical values must agree, got {t.state}"
+    assert t.agreed_value == "15000"
+    assert t.divergence_note is None
+    assert "rent" not in res.flagged
 
 
 if __name__ == "__main__":

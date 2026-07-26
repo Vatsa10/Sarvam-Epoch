@@ -151,7 +151,8 @@ class TurnResult:
 
 
 def apply_tool_calls(neg: Negotiation, party: str, lang: str,
-                     calls: list[dict], turn_idx: int) -> TurnResult:
+                     calls: list[dict], turn_idx: int,
+                     gloss: str = "") -> TurnResult:
     """Dispatch parsed tool calls into negotiation state.
 
     Pure and synchronous, which is why it is fully testable without a network.
@@ -193,7 +194,12 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
         # counter-offer `counter` and flags it anyway, or it labels it `accept` with
         # a different number and flags that. is_open_haggle catches the second by
         # looking at the figures themselves rather than at the label.
-        if key in countered or neg.is_open_haggle(key):
+        # Three ways the model gets this wrong, all seen live: it flags a term it
+        # labelled `counter`; it labels a counter `accept` with a different number
+        # and flags that; or it flags a term where both parties said the SAME
+        # value. The last is the worst - the record plainly shows agreement.
+        if (key in countered or neg.values_match(key)
+                or neg.is_open_haggle(key)):
             continue
         t = neg.terms.get(key)
         if t is not None and t.proposals:
@@ -208,6 +214,22 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
             res.flagged.append(key)
 
     # dedupe, preserve order
+    # Last line of defence on the core mechanic: if the model recorded this
+    # speaker's value as identical to the other side's while their own words carry a
+    # different number, it copied instead of listening - and a real divergence just
+    # became a false agreement. Raise it as a doubt rather than silently trusting it.
+    for u in updates:
+        key = u.get("term")
+        if key and neg.copied_the_other_side(key, party, gloss):
+            term = neg.terms[key]
+            term.state = TermState.PROPOSED
+            term.agreed_value = None
+            term.doubt = (
+                f"{party}'s own words for {key} name a different amount than the "
+                f"value recorded for them. Confirm what {party} actually meant."
+            )
+            res.flagged.append(key)
+
     res.flagged = list(dict.fromkeys(res.flagged))
     return res
 
@@ -242,7 +264,8 @@ async def run_turn(neg: Negotiation, party: str, lang: str,
         user=build_context(neg, party, transcript, gloss),
         tools=TOOLS,
     )
-    res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message), turn_idx)
+    res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message),
+                           turn_idx, gloss=gloss or "")
     if not res.summary:
         # Prefer the English gloss over echoing native script back at the operator.
         res.summary = (message.get("content") or gloss or transcript).strip()
