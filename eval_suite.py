@@ -35,6 +35,7 @@ artifact and is proven.
 from __future__ import annotations
 
 import argparse
+import array
 import asyncio
 import base64
 import io
@@ -158,10 +159,25 @@ class Log:
         self.f.close()
 
 
-def pcm_frames(wav_bytes: bytes, chunk: int = 1600):
-    """Bulbul wav -> raw PCM16 frames, exactly what the browser worklet emits."""
+def pcm_frames(wav_bytes: bytes, chunk: int = 1600, rate: int = 16000):
+    """Bulbul wav -> raw PCM16 frames at `rate`, exactly what the browser worklet
+    emits. Bulbul renders at 22050 Hz while the STT socket is opened at 16000, so
+    the samples MUST be resampled - handing 22050 over as 16000 pitches the speech
+    up and the ASR degrades on exactly the numerals these cases turn on.
+    (audioop is gone in 3.13, hence the hand-rolled linear pass.)"""
     with wave.open(io.BytesIO(wav_bytes)) as w:
-        raw = w.readframes(w.getnframes())
+        src_rate, raw = w.getframerate(), w.readframes(w.getnframes())
+    if src_rate != rate:
+        src = array.array("h")
+        src.frombytes(raw)
+        step = src_rate / rate
+        out = array.array("h", (0,)) * int(len(src) / step)
+        for i in range(len(out)):
+            pos = i * step
+            j = int(pos)
+            nxt = src[j + 1] if j + 1 < len(src) else src[j]
+            out[i] = int(src[j] + (nxt - src[j]) * (pos - j))
+        raw = out.tobytes()
     for i in range(0, len(raw), chunk * 2):
         yield raw[i:i + chunk * 2]
 
@@ -239,6 +255,11 @@ class Agent:
 
                 if kind == "joined":
                     self.party_id = (d.get("you") or {}).get("party_id")
+                    # The server emits `floor` only on a TRANSITION, so the first
+                    # speaker never learns from a frame that the floor is already
+                    # theirs - seed it from the join snapshot or both agents wait
+                    # on each other until the case times out.
+                    self.holds_floor = d.get("turn_holder") == self.party_id
                     self.log("joined", party=self.name, party_id=self.party_id,
                              turn_holder=d.get("turn_holder"),
                              other=(d.get("other") or {}).get("name"))

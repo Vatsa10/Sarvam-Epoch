@@ -1,0 +1,15 @@
+{"t": 1785060066.89, "stage": "case_start", "case": "clean", "why": "The happy path must actually close, or nothing is draftable."}
+{"t": 1785060068.36, "stage": "room", "code": "LW45LR"}
+{"t": 1785060070.976, "stage": "joined", "party": "Vatsa", "party_id": "p1", "turn_holder": "p1", "other": "Sreedev"}
+{"t": 1785060072.851, "stage": "joined", "party": "Sreedev", "party_id": "p2", "turn_holder": "p1", "other": "Vatsa"}
+{"t": 1785060072.851, "stage": "peer_joined", "party": "Vatsa", "peer": "Sreedev"}
+{"t": 1785060072.86, "stage": "party_line", "party": "Vatsa", "lang": "gu-IN", "line": "હું મહિને 12000 રૂપિયાનું ભાડું માંગું છું."}
+{"t": 1785060074.644, "stage": "tts", "party": "Vatsa", "chars": 43, "wav_bytes": 150572}
+{"t": 1785060077.465, "stage": "streamed", "party": "Vatsa", "frames": 35}
+{"t": 1785060088.711, "stage": "party_line", "party": "Vatsa", "lang": "gu-IN", "line": "હું ભાડું ૧૨,૦૦૦ રૂપિયા પ્રતિ મહિનો માંગું છું."}
+{"t": 1785060090.446, "stage": "tts", "party": "Vatsa", "chars": 47, "wav_bytes": 139282}
+{"t": 1785060093.113, "stage": "streamed", "party": "Vatsa", "frames": 32}
+{"t": 1785060290.45, "stage": "error", "party": "Vatsa", "text": "ConnectionClosedError: no close frame received or sent"}
+{"t": 1785060292.298, "stage": "error", "party": "Sreedev", "text": "ConnectionClosedError: no close frame received or sent"}
+{"t": 1785060308.387, "stage": "timeout", "note": "case hit the 240s ceiling"}
+{"t": 1785060308.388, "stage": "verdict", "passed": false, "expectation": "a clean acceptance must reach AGREED (got None)", "final_sheet": {}}
