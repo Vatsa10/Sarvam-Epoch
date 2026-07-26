@@ -1,0 +1,5 @@
+ideas_and_rubrics.md
+node_modules/
+__pycache__/
+.env
+*.pyc
