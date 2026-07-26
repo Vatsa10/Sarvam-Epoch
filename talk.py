@@ -1,9 +1,15 @@
 """Terminal harness. Speak into your mic, see it transcribed and translated.
 
     python talk.py                 # batch: record -> Saaras -> translate
+    python talk.py --listen        # full loop: it understands in context and SPEAKS BACK
     python talk.py --stream        # live: partial transcripts + VAD signals
     python talk.py --mediate       # full pipeline: also run the agent, print the term sheet
     python talk.py --list-devices  # find your mic if the default is wrong
+
+Pick each side's language for --listen, either at the prompt or up front:
+
+    python talk.py --listen --lang1 gu-IN --lang2 ml-IN
+    python talk.py --listen --lang1 hi-IN --lang2 ta-IN --name1 Ravi --name2 Meena
 
 This exists because no browser has run the capture path yet. It proves Saaras on
 real Gujarati/Malayalam mic input, and --mediate proves the whole product without
@@ -67,6 +73,22 @@ LANGS = {
     "7": ("kn-IN", "Kannada"),
     "8": ("bn-IN", "Bengali"),
 }
+
+# Bulbul speaker per language. Verified live: the API accepts ratan/shubh/priya/pooja
+# for all 11 TTS languages, so these are quality picks (the docs recommend ratan for
+# gu-IN and shubh for ml-IN), not hard constraints. Party 1 and party 2 are always
+# given DIFFERENT voices - on a two-way call you need to hear who is speaking.
+SPEAKERS = {
+    "gu-IN": ("ratan", "priya"),
+    "ml-IN": ("shubh", "pooja"),
+}
+DEFAULT_SPEAKERS = ("ratan", "shubh")
+
+
+def speaker_for(lang: str, slot: int) -> str:
+    """slot 0 = first party, slot 1 = second. Distinct voices even on same language."""
+    return SPEAKERS.get(lang, DEFAULT_SPEAKERS)[slot]
+
 
 # Documented VAD knobs on the streaming socket. high_vad_sensitivity is the one
 # that matters in a loud room; interrupt_min_speech_frames is barge-in - how much
@@ -270,6 +292,40 @@ async def say(text: str, lang: str, speaker: str, client: SarvamAI) -> None:
         print(f"  (tts failed: {type(e).__name__})")
 
 
+def configure_parties(lang1: str | None, lang2: str | None,
+                      name1: str | None, name2: str | None) -> None:
+    """Set each party's language for this session.
+
+    Mutates sarvam.PARTIES in place rather than threading config through every call,
+    because PARTIES is already the single source of truth every module reads - agent
+    context, transcript attribution, TTS voice and the lawyer packet all key off it.
+    """
+    from app import sarvam as sv
+
+    if not lang1:
+        lang1 = pick("Party 1 speaks:", "1")[0]
+    if not lang2:
+        lang2 = pick("Party 2 speaks:", "2")[0]
+
+    labels = {code: name for code, name in LANGS.values()}
+    ids = list(sv.PARTIES)
+    for slot, (pid, lang, nm) in enumerate(
+            zip(ids, (lang1, lang2), (name1, name2))):
+        sv.PARTIES[pid] = {
+            "name": nm or sv.PARTIES[pid]["name"],
+            "lang": lang,
+            "label": labels.get(lang, lang),
+            "speaker": speaker_for(lang, slot),
+        }
+
+    a, b = (sv.PARTIES[i] for i in ids)
+    if a["lang"] == b["lang"]:
+        print(f"\n  ⚠ both parties set to {a['label']} — there is nothing to mediate "
+              f"across, so relays will be near-identical to the input.")
+    print(f"\n  {a['name']}: {a['label']} (voice {a['speaker']})"
+          f"   |   {b['name']}: {b['label']} (voice {b['speaker']})")
+
+
 async def listen(mediate: bool = True) -> None:
     """Full conversational loop: you speak, it understands in context, it speaks back.
 
@@ -416,6 +472,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--listen", action="store_true",
                     help="full loop: you speak, it understands in context and SPEAKS BACK")
+    ap.add_argument("--lang1", help="party 1 language code, e.g. gu-IN (skips the prompt)")
+    ap.add_argument("--lang2", help="party 2 language code, e.g. ml-IN (skips the prompt)")
+    ap.add_argument("--name1", help="party 1 display name")
+    ap.add_argument("--name2", help="party 2 display name")
     ap.add_argument("--stream", action="store_true", help="live partials + VAD signals")
     ap.add_argument("--mediate", action="store_true", help="also run the agent and print the term sheet")
     ap.add_argument("--list-devices", action="store_true")
@@ -429,6 +489,7 @@ def main() -> int:
         return 1
 
     if a.listen:
+        configure_parties(a.lang1, a.lang2, a.name1, a.name2)
         try:
             asyncio.run(listen())
         except KeyboardInterrupt:
