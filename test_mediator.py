@@ -59,7 +59,9 @@ def test_sheet_blocks_drafting():
             "stance": "propose"}], 0)
     n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000", "verbatim": "y",
             "stance": "accept"}], 1)
-    assert n.sheet()["drafting_safe"] is True
+    # Only rent is settled; the other five terms are still OPEN - a hole in the
+    # contract, not a partial agreement - so drafting is not yet safe.
+    assert n.sheet()["drafting_safe"] is False
 
     n.apply("vatsa", "gu-IN", [{"term": "painting", "value": "tenant", "verbatim": "a",
             "stance": "propose"}], 2)
@@ -426,6 +428,94 @@ def test_sheet_lists_parked_under_blocked():
     assert "rent" in s["blocked"]
     assert s["drafting_safe"] is False
     assert s["terms"][0]["attempts"] == n.terms["rent"].attempts
+
+
+def test_reopened_term_is_flagged_and_records_lost_value():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    assert n.terms["rent"].state is TermState.AGREED
+    assert n.terms["rent"].reopened_from is None
+
+    keys = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "chaud hajaar", "stance": "counter"}], 5)
+    assert n.terms["rent"].state is TermState.PROPOSED
+    assert n.terms["rent"].reopened_from == "15000"
+    assert "rent" in keys
+    assert n.sheet()["terms"][0]["reopened_from"] == "15000"
+
+
+def test_reagreeing_clears_reopened_from():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "chaud hajaar", "stance": "counter"}], 5)
+    assert n.terms["rent"].reopened_from == "15000"
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "14000",
+            "verbatim": "sari", "stance": "accept"}], 6)
+    assert n.terms["rent"].state is TermState.AGREED
+    assert n.terms["rent"].reopened_from is None
+
+
+def test_one_sided_accept_never_reaches_agreed():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "accept"}], 0)
+    assert n.terms["rent"].state is TermState.PROPOSED
+    assert n.terms["rent"].state is not TermState.AGREED
+
+
+def test_one_sided_detects_single_party_term():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    assert n.one_sided("rent") is True
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    assert n.one_sided("rent") is False
+
+
+def test_undiscussed_lists_open_keys():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    assert "rent" not in n.undiscussed()
+    assert set(n.undiscussed()) == {"deposit", "duration", "maintenance",
+                                     "notice_period", "painting"}
+
+
+def test_drafting_safe_false_while_any_term_open():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "sari", "stance": "accept"}], 1)
+    s = n.sheet()
+    assert s["drafting_safe"] is False
+    assert "rent" not in s["undiscussed"]
+    assert len(s["undiscussed"]) == 5
+
+
+def test_drafting_safe_true_when_all_six_settled():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    for key in ("rent", "deposit", "duration", "maintenance", "notice_period"):
+        n.terms[key].state = TermState.AGREED
+    n.terms["painting"].state = TermState.REJECTED
+    s = n.sheet()
+    assert s["drafting_safe"] is True
+    assert s["undiscussed"] == []
 
 
 if __name__ == "__main__":

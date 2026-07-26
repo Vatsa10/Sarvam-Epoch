@@ -60,6 +60,7 @@ class Term:
     divergence_note: str | None = None
     doubt: str | None = None   # magnitude question awaiting an answer
     attempts: int = 0          # rounds that touched this term without settling it
+    reopened_from: str | None = None  # AGREED value lost when the term came undone
 
     def latest_by(self, party: str) -> Proposal | None:
         for p in reversed(self.proposals):
@@ -228,6 +229,10 @@ class Negotiation:
             term = self.terms[key]
             other = self._other_party(party)
             prior = term.latest_by(other)
+            # Snapshot BEFORE this update mutates state, so a settled term coming
+            # undone can be told apart from one that was never settled at all.
+            was_agreed = term.state == TermState.AGREED
+            agreed_value_before = term.agreed_value
 
             prop = Proposal(
                 party=party,
@@ -264,6 +269,8 @@ class Negotiation:
                         )
                     term.state = TermState.PROPOSED
                     term.agreed_value = None
+                    if was_agreed:
+                        term.reopened_from = agreed_value_before
                     needs_interjection.append(key)
                     continue
                 term.doubt = None
@@ -332,6 +339,15 @@ class Negotiation:
                     term.state = TermState.PROPOSED
                 term.agreed_value = None
                 term.divergence_note = None
+
+            # Reaching AGREED clears any prior reopen flag; leaving AGREED (via any
+            # branch above) records what was lost and forces the relay to announce it.
+            if term.state == TermState.AGREED:
+                term.reopened_from = None
+            elif was_agreed:
+                term.reopened_from = agreed_value_before
+                if key not in needs_interjection:
+                    needs_interjection.append(key)
 
         return needs_interjection
 
@@ -405,6 +421,23 @@ class Negotiation:
         term.divergence_note = reason
         return True
 
+    def one_sided(self, key: str) -> bool:
+        """True when a term has proposals from exactly ONE party.
+
+        Surfaces "you have agreed to things the other side never offered" - an
+        accept can still land as PROPOSED (see apply()) when `prior is None`, but
+        that alone doesn't tell a caller the term is entirely one-sided.
+        """
+        term = self.terms.get(key)
+        if term is None:
+            return False
+        parties_seen = {p.party for p in term.proposals}
+        return len(parties_seen) == 1
+
+    def undiscussed(self) -> list[str]:
+        """Keys still in OPEN state - never raised by either party at all."""
+        return sorted(k for k, t in self.terms.items() if t.state == TermState.OPEN)
+
     def deadlocked(self, key: str, cap: int = 3) -> bool:
         """True once a term has burned `cap` failed rounds without settling.
 
@@ -439,8 +472,10 @@ class Negotiation:
     # ---------- views ----------
 
     def sheet(self) -> dict:
+        # A term nobody ever raised is a hole in the contract, not a partial
+        # agreement - it must block drafting exactly like a disagreement does.
         drafting_safe = all(
-            t.state in (TermState.AGREED, TermState.OPEN) for t in self.terms.values()
+            t.state in (TermState.AGREED, TermState.REJECTED) for t in self.terms.values()
         )
         return {
             "session_id": self.session_id,
@@ -454,6 +489,7 @@ class Negotiation:
                     "divergence_note": t.divergence_note,
                     "doubt": t.doubt,
                     "attempts": t.attempts,
+                    "reopened_from": t.reopened_from,
                     "proposals": [asdict(p) for p in t.proposals],
                 }
                 for t in self.terms.values()
@@ -462,6 +498,7 @@ class Negotiation:
             "blocked": [t.key for t in self.terms.values()
                         if t.state in (TermState.DIVERGED, TermState.HEDGED,
                                        TermState.PARKED)],
+            "undiscussed": self.undiscussed(),
         }
 
 
