@@ -11,6 +11,7 @@ translation layer can ever produce.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -363,6 +364,13 @@ class Negotiation:
         Detected by evidence rather than by trusting the label: if the speaker's own
         words (or their English gloss) carry a number that is nowhere in the value
         recorded for them, the value did not come from them.
+
+        Compare number TOKENS, never a concatenated digit blob. Squashing verbatim
+        and gloss into one string made every genuine acceptance look copied: "15000
+        ശരിയാണ്" glossed as "15000 is fine" flattens to "1500015000", which of course
+        does not equal the recorded "15000". That fired a false doubt on every
+        accept, so no term ever reached AGREED and the deadlock ladder ran on terms
+        nobody was fighting about.
         """
         term = self.terms.get(key)
         if term is None:
@@ -371,9 +379,10 @@ class Negotiation:
         other = term.latest_by(self._other_party(party))
         if mine is None or other is None or not _same(mine.value, other.value):
             return False
-        said = "".join(c for c in (mine.verbatim + " " + gloss) if c.isdigit())
-        recorded = "".join(c for c in mine.value if c.isdigit())
-        return bool(said) and said != recorded
+        said = _numbers(mine.verbatim + " " + gloss)
+        # No intersection, not inequality: the speaker's words and their gloss name
+        # the same amount twice, and either one matching the record is enough.
+        return bool(said) and not (said & _numbers(mine.value))
 
     def values_match(self, key: str) -> bool:
         """True when both parties' latest values are the same thing.
@@ -508,6 +517,12 @@ class Negotiation:
                                        TermState.PARKED)],
             "undiscussed": self.undiscussed(),
         }
+
+
+def _numbers(text: str) -> set[str]:
+    """Distinct numbers in `text`, as tokens. Thousands separators are stripped
+    first so "15,000" and "15000" are one number, not "15" and "000"."""
+    return set(re.findall(r"\d+", (text or "").replace(",", "").replace("٬", "")))
 
 
 def _same(a: str, b: str) -> bool:

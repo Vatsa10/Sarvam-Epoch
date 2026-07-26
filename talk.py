@@ -370,13 +370,25 @@ async def listen(mediate: bool = True) -> None:
             gloss = await sv.translate(transcript, "en-IN", me["lang"])
             print(f"  gloss : {gloss}")
 
+            # Which terms were ALREADY in doubt before this turn. A doubt is a
+            # question asked once, not a standing condition: without this snapshot
+            # the same unanswered question is re-asked on every subsequent turn,
+            # in whichever language happens to be listening.
+            had_doubt = {k for k, t in neg.terms.items() if t.doubt}
+
             res = await agent.run_turn(neg, party, me["lang"], transcript,
                                        len(neg.turns), gloss=gloss)
 
             # What the agent says, and WHO it says it to, is decided by what just
             # happened to the sheet.
-            relay = (gloss or transcript).strip()
-            doubt = next((t.doubt for t in neg.terms.values() if t.doubt), None)
+            #
+            # res.summary, not the raw gloss. The gloss is Mayura translating a bare
+            # sentence with no domain: it rendered "ભાડું" (rent) as "fare", which
+            # then reached the listener as "യാത്രാഫീസ്" - travel fee. The agent's
+            # summary is written knowing this is a tenancy, so the noun survives.
+            relay = (res.summary or gloss or transcript).strip()
+            doubt = next((t.doubt for k, t in neg.terms.items()
+                          if t.doubt and k not in had_doubt), None)
 
             # A clarification is only meaningful when something on the sheet is
             # actually ambiguous. When the speaker simply ASKS a question ("what is
@@ -417,7 +429,14 @@ async def listen(mediate: bool = True) -> None:
                                   transcript=transcript, relay_text=spoken,
                                   interjection=res.clarification))
 
-            print(f"  {why} → {other['name']} ({other['label']}): {spoken}")
+            # `target`, not `other` - a magnitude doubt goes BACK to the speaker,
+            # and printing the other party's name there says the opposite of what
+            # just happened.
+            print(f"  {why} → {target['name']} ({target['label']}): {spoken}")
+            if res.readiness:
+                # A note to the room, printed alongside the relay - never in place
+                # of it. It is not spoken.
+                print(f"  note   : {res.readiness}")
             # Slower when the sheet just broke or a number is in doubt; brisker
             # on a plain relay. Same policy the meet relay uses.
             await say(spoken, target["lang"], target["speaker"], client,
@@ -428,7 +447,11 @@ async def listen(mediate: bool = True) -> None:
             _print_sheet(neg.sheet())
             party = other_id
             print()
-        except KeyboardInterrupt:
+        # EOFError too: a closed stdin makes record()'s input() raise instantly and
+        # forever. Caught by the generic handler below it printed "turn failed" and
+        # immediately re-prompted, spinning without ever reading a byte of audio.
+        # Nothing can recover a session with no stdin, so end it the same way Ctrl+C does.
+        except (KeyboardInterrupt, EOFError):
             print("\n  final sheet:")
             _print_sheet(neg.sheet())
             await sv.aclose()

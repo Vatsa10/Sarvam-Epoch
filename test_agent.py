@@ -54,8 +54,12 @@ def test_check_readiness_lists_undiscussed_terms():
     apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
         "term": "rent", "value": "15000", "verbatim": "x", "stance": "propose"}}], 0)
     res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "check_readiness", "arguments": {}}], 1)
-    assert "rent" not in res.summary
-    assert "notice_period" in res.summary
+    assert "rent" not in res.readiness
+    assert "notice_period" in res.readiness
+    # The checklist must stay OUT of the relay. It used to be written to summary,
+    # which is what the other party hears - so a turn where the model called
+    # check_readiness reached the listener as a list of terms instead of speech.
+    assert res.summary == ""
 
 
 def test_flag_divergence_tool_branch():

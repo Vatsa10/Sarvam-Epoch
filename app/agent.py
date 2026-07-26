@@ -57,7 +57,16 @@ language, and you maintain the term sheet.
 Call update_term for every term they touched. Call flag_divergence when this speaker
 accepts a term but means a different value than the other party proposed. Call
 request_clarification at most once per turn, and only when a real ambiguity blocks
-drafting. Call check_readiness when the parties sound like they are wrapping up.
+drafting. Call check_readiness ONLY when the parties sound like they are wrapping up,
+and never instead of update_term — it is a housekeeping checklist, not a way to handle
+a turn. If the speaker named a figure or took a position, update_term is mandatory,
+whether or not you also check readiness.
+
+THE GLOSS IS A MACHINE TRANSLATION AND IT MISREADS THIS DOMAIN. Every conversation you
+see is about renting a home. The translator has rendered "ભાડું"/"വാടക" (rent) as
+"fare", and "I am putting it up for 15000" as a house SALE. Read those as rent and as a
+monthly rent offer. Trust the native text over the gloss for what was meant; trust the
+gloss over the native text only for the digits of an amount.
 
 THE RULE THAT MATTERS: when a speaker ACCEPTS, set `value` to what THEY mean, never to
 what the other side proposed. Two people can both say yes and mean different things -
@@ -92,8 +101,19 @@ thousand, not seventeen rupees. If a stated amount would be absurd taken literal
 monthly rent of 17, a deposit of 50 — do NOT record it. Call request_clarification and
 ask which magnitude they mean ("seventeen thousand, or seventeen hundred?"). Recording a
 nonsense number is worse than asking, because it silently becomes a contract clause.
+This applies ONLY when the speaker actually said a number. If they asked what the rent
+is and named no figure, there is no magnitude to resolve — asking "did you mean
+seventeen thousand or seventeen hundred?" about a number nobody said is nonsense to
+both people on the call. Never invent a figure to then ask about.
 
-Then write a one-sentence plain-English summary of what the speaker said.
+THEN WRITE THE RELAY. This sentence is SPOKEN ALOUD to the other party, translated into
+their language — it is not a log entry. Address them directly as "you" and pass on what
+was said, first person where natural. Keep every number exactly.
+  Speaker says "હેલો હેલો હાય"  ->  "Vatsa says hello."
+  Speaker says rent is 15000    ->  "Vatsa says the rent will be 15,000 a month."
+Never describe the utterance from outside it. "Vatsa greeted the other party" is a
+report about a conversation; the listener is IN the conversation and needs the thing
+itself. Never say "the other party" — that is the person you are speaking to.
 
 ATTRIBUTION IS NOT OPTIONAL. The utterance you are given belongs to the speaker named in
 SPEAKING NOW. Never record a stance on behalf of the other party. If the speaker refers to
@@ -160,6 +180,13 @@ class TurnResult:
     flagged: list[str] = field(default_factory=list)
     clarification: str | None = None
     summary: str = ""
+    # Separate from `summary` ON PURPOSE. summary is the relay - the thing the other
+    # party actually hears. check_readiness used to write its checklist into summary
+    # and destroyed the relay outright: measured on a live call, three turns in eight
+    # reached the listener as "Still undiscussed: deposit, duration, ..." instead of
+    # what the speaker had just said, including a 13,000 counter-offer that was
+    # simply never heard. A housekeeping note must never displace speech.
+    readiness: str = ""
 
 
 def apply_tool_calls(neg: Negotiation, party: str, lang: str,
@@ -185,10 +212,15 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
             res.clarification = args.get("question")
         elif name == "check_readiness":
             undiscussed = [k for k, t in neg.terms.items() if t.state is TermState.OPEN]
-            res.summary = "Still undiscussed: " + (", ".join(undiscussed) or "nothing")
+            res.readiness = "Still undiscussed: " + (", ".join(undiscussed) or "nothing")
         # unknown tool names are ignored on purpose - a hallucinated call must not
         # crash a live turn
 
+    # NOTE: do not "drop values whose digits appear in neither the verbatim nor the
+    # gloss" as an invented-number guard. That was tried and it deletes the normal
+    # case: people SAY numbers as words, so verbatim "pandar hajaar" legitimately
+    # backs value "15000" with no digit in sight. The question-with-no-figure case
+    # it was meant to catch is handled in the prompt instead.
     if updates:
         res.flagged.extend(neg.apply(party, lang, updates, turn_idx))
         res.updates = updates
