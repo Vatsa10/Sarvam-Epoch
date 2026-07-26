@@ -186,10 +186,14 @@ class Negotiation:
     the record and the row is the current view of it.
     """
 
-    def __init__(self, session_id: str = "default") -> None:
+    def __init__(self, session_id: str = "default",
+                 parties: tuple[str, str] | None = None) -> None:
         self.session_id = session_id
         self.turns: list[Turn] = []
         self.terms: dict[str, Term] = {k: Term(k, v) for k, v in TERMS.items()}
+        # Explicit parties let a room-scoped negotiation name its own two
+        # participants instead of reading the global demo's sarvam.PARTIES.
+        self.parties: tuple[str, str] | None = parties
 
     # ---------- state machine ----------
 
@@ -352,7 +356,8 @@ class Negotiation:
         return "\n".join(lines) or "(no prior turns - this is the first)"
 
     def _other_party(self, party: str) -> str:
-        return next(p for p in sarvam.PARTIES if p != party)
+        pool = self.parties if self.parties is not None else tuple(sarvam.PARTIES)
+        return next(p for p in pool if p != party)
 
     # ---------- views ----------
 

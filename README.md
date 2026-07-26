@@ -1,10 +1,7 @@
 # NyayBandhan
 
-**A faithful translator still manufactures the dispute it was built to prevent.**
-
-Two people who share no common language negotiate a rental agreement by voice. The
-agent is not a translator — it tracks the state of every term and **refuses to record
-an agreement that isn't one**.
+Two people. No common language. A live translated call with a mediator that refuses
+to record an agreement that isn't one.
 
 **Declared Sarvam parameter: VOICE EXPERIENCE.** One parameter. Extra APIs score zero.
 
@@ -58,121 +55,76 @@ So the system tracks a *state* per term:
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env          # SARVAM_API_KEY + OPENAI_API_KEY
-python verify.py --no-stt       # preflight both providers
-python run_tests.py             # 60+ assertions, no network
-uvicorn app.main:app --port 8000
+copy .env.example .env      # paste the Sarvam API key + a Postgres DATABASE_URL
+
+cd frontend
+npm install
+npm run build                # static export -> frontend/out/
+cd ..
+
+uvicorn app.main:app --reload --port 8000
 ```
 
-**Terminal harness** — the whole product without a browser:
+Open `http://localhost:8000` — it redirects straight to the meet UI (`/meet`). Create
+a meeting, share the code (or the link), and join from a second tab/device.
 
-```powershell
-python talk.py --listen --lang1 gu-IN --lang2 ml-IN   # speak; it replies aloud
-python talk.py --stream                                # live partials + VAD signals
-python talk.py --list-devices                          # if the mic is wrong
-```
+Optional hot-reload dev mode while iterating on frontend components: `npm run dev` in
+`frontend/` (port 3000) against the backend on 8000 — the one cross-origin case, which
+is why CORS is enabled for `http://localhost:3000` in `app/main.py`.
 
----
+## The thesis
 
-## Impact
+A relay translates faithfully and *manufactures* the dispute it was built to prevent.
 
-**Who:** ~45 crore internal migrants in India, overwhelmingly renting outside their
-language region. A Bihari tenant and a Malayali landlord in Kochi share no fluent
-language, so a broker "translates" and both sides sign a document neither fully
-understood.
+One party says maintenance is *alag* — separate, actual costs. The other hears
+"separate" and agrees, meaning a fixed monthly amount. **Both said yes. Both meant
+different things.** A translation layer passes both yeses through cleanly and neither
+party ever learns they diverged. Six months later that is a court case.
 
-**Baseline:** rental deposits run 2–10 months' rent, and deposit disputes are among the
-most common consumer complaints in Indian metros. Consumer-forum resolution takes
-1–3 years — long enough that most tenants simply forfeit the money. The dispute almost
-never starts at signing; it starts at **exit**, when "maintenance was separate" turns
-out to have meant two different things.
+So the agent is not a translator. It tracks the *state of every term* and interjects —
+in both languages — the moment a mutual yes turns out to be two different yeses.
 
-**Frequency:** every rental agreement, and India's urban rental stock turns over
-roughly annually on the standard 11-month lease.
-
-**The metric we move:** *undetected divergent terms per agreement signed.* Today it is
-unmeasured — nobody detects them, which is exactly why they surface at exit. This
-converts an invisible failure into a blocked clause **at the table**, when the
-correction costs one more sentence instead of two years.
-
-**Why >30% is defensible:** we are not claiming to reduce disputes by persuasion. Every
-divergence caught is one clause that cannot be signed ambiguously — a mechanical
-reduction, not a behavioural one. In our own scripted runs, 1 term in 6 reached
-`DIVERGED` on a conversation both parties believed had gone fine.
-
-**Who pays:** not the tenant. Rental platforms, brokerages and notaries carry the
-dispute cost and the churn, and already sell agreement drafting — this slots into a
-step they already charge for.
-
----
-
-## What each part earns
-
-| Parameter | Wt | The specific evidence — and nothing else uses it |
-|---|---|---|
-| **JTBD** | ×2.5 | `/replay` runs 3 scripted negotiations end to end, zero keystrokes, diffed against expected states; each emits a lawyer packet. |
-| **Voice Experience** | ×2.5 | Saaras on mutually unintelligible Gujarati/Malayalam with code-mix; hedge ≠ accept; magnitude confirmation; barge-in; the agent decides *when to interject vs relay* and shifts pace when it does. |
-| **Creativity** | ×1.5 | The `DIVERGED` mechanic — reframing a translation problem as an agreement-state problem, and separating *hidden* disagreement from open haggling. |
-| **Impact** | ×1.5 | The section above: beneficiary, baseline, frequency, one metric, payer, adoption path. |
-| **Memory** | ×1 | Append-only proposal log with per-party provenance; unanswered magnitude doubts and routing permissions survive a live server restart. |
-| **Delight** | ×1 | The **drafter**: a blocked term doesn't just stop the process — it prints the unresolved question, both parties' verbatim words, and the next action, in the lawyer's own language. |
-
-**Not** claimed: translation quality (no judge can verify it), or "realtime" (turns are
-VAD-segmented; latency is measured, not asserted).
-
----
+`TermState.DIVERGED` is the state no pure translation layer can produce. That is the
+product.
 
 ## Architecture
 
 ```
-party A mic ─┐                                    ┌─ live notes (B's language)
-             ├─→ Saaras STT (codemix, VAD) ──────→┤
-party B mic ─┘         │                          └─ live notes (A's language)
-                       │
-              English gloss (Mayura) ── numerals read off the gloss,
-                       │                  verbatim stays in native script
-                       ↓
-        gpt-4o-mini + 4 tools ──→ term state machine ──→ append-only log
-                       │              │
-                       │              ├─→ /packet  — term sheet + provenance
-                       │              └─→ /draft   — clauses in the LAWYER's language
-                       ↓
-              Bulbul TTS → the other party, in their language
+Party A mic ──WS──┐                            ┌── notes panel (term sheet + captions)
+                  ├──→  FastAPI relay  ──────→ ┤
+Party B mic ──WS──┘         │                  └── notes panel (term sheet + captions)
+                            │
+  per VAD segment:  Sarvam STT WS ──→ /translate ──→ live captions to the OTHER party
+                            │
+  on VAD end-of-turn:  sarvam-30b + tools ──→ mediator state ──→ both panels
+                            │
+                      Bulbul TTS ──→ one spoken relay sentence to the listener
 ```
 
-| File | Role |
-|---|---|
-| `app/mediator.py` | **The scored core.** Term state machine, divergence, magnitude doubt |
-| `app/agent.py` | One tool-calling agent: `update_term`, `flag_divergence`, `request_clarification`, `check_readiness` |
-| `app/drafter.py` | Lawyer-facing draft — settled clauses only; blocked terms become open questions |
-| `app/llm.py` | Reasoning provider (gpt-4o-mini / sarvam-30b) |
-| `app/sarvam.py` | Saaras, Bulbul, Mayura — every endpoint in one place |
-| `app/stt_stream.py` | STT WebSocket URL + message classification |
-| `app/session.py` | Append-only persistence; survives restart |
-| `talk.py` | Terminal harness: `--listen`, `--stream`, `--mediate` |
+- `app/sarvam.py` — every Sarvam endpoint/param in one place, so `verify.py` proves them all
+- `app/mediator.py` — **the scored core.** Term state machine + divergence detection, scoped per room
+- `app/agent.py` — one tool-calling `sarvam-30b` call per completed turn
+- `app/stt_stream.py` — Sarvam STT WebSocket URL builder + frame classifier
+- `app/session.py` — snapshot persistence (file-based; also reused for the DB path)
+- `app/meet_interface/` — the real-time meet:
+  - `rooms.py` — in-memory room registry (create/join, max 2 participants), Postgres-backed for durability
+  - `db.py` — Neon Postgres: rooms, participants, term-sheet snapshots (degrades to in-memory-only if unreachable)
+  - `languages.py` — supported languages (English + Indian languages) and their TTS speakers
+  - `ws.py` — the live relay: browser PCM16 → Sarvam STT WS → live captions + one agent call per turn → TTS → broadcast
+  - `app.py` — router: `POST /api/meet/rooms`, `GET /api/meet/languages`, `WS /api/meet/ws/{code}`
+- `frontend/` — Next.js 14 app (TypeScript, Tailwind, Zustand), built as a **static export** and served by FastAPI at `/meet`
+- `verify.py` — first-hour Sarvam API preflight
 
----
+## What you need to supply
 
-## The demo
+- **`SARVAM_API_KEY`** — root `.env`.
+- **`DATABASE_URL`** — a Postgres connection string (Neon or otherwise), root `.env`. Rooms still
+  work with no DB configured (in-memory only) — a room just won't survive a server restart.
 
-1. **The problem** — deposit disputes don't start at signing, they start at exit, when
-   "maintenance was separate" turns out to have meant two things.
-2. **Live** — Vatsa speaks Gujarati, Sreedev answers in Malayalam. Notes stream in each
-   listener's language; the agent speaks the relay aloud.
-3. **The catch** — both agree maintenance is "separate". The sheet goes **red**. The
-   agent interjects in both languages with the one disambiguating question.
-4. **The artifact** — `/draft` produces the agreement in the lawyer's language, with the
-   diverged clause **deliberately not drafted** and both parties' exact words beneath it.
+## Open before demo
 
-Fallback if audio fails: `POST /replay/scenario_1` exercises the entire agent → term
-state → packet chain with no microphone.
-
----
-
-## Verified live
-
-- Sarvam chat, Bulbul (gu-IN + ml-IN), gpt-4o-mini tool calling — via `verify.py`
-- Saaras streaming socket returns transcripts plus `START_SPEECH`/`END_SPEECH` VAD signals
-- `audio/wav` is the only accepted frame encoding (`audio/x-raw` is rejected outright)
-- Bulbul accepts `ratan`/`shubh`/`priya`/`pooja` across all 11 TTS languages
-- `python run_tests.py` — all suites green
+- [ ] `verify.py` all green on venue wifi; note real latency
+- [ ] confirm `speaker` names valid for every language in `app/meet_interface/languages.py`
+      (only `gu-IN`→`ratan` and `ml-IN`→`shubh` are confirmed against live docs)
+- [ ] two devices, two languages, one call: divergence still turns a term red
+- [ ] restart the server mid-call once — a rejoined room's term sheet survives
