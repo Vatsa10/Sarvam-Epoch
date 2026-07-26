@@ -1,0 +1,8 @@
+[
+  {
+    "case": "clean",
+    "passed": false,
+    "expectation": "a clean acceptance must reach AGREED (got None)",
+    "sheet": {}
+  }
+]
