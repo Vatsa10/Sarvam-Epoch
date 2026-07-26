@@ -400,21 +400,37 @@ def _packet_html(s: dict) -> str:
             for p in t["proposals"]
         )
         note = f"<div class=note>{t['divergence_note']}</div>" if t.get("divergence_note") else ""
+        reopen = (f"<div class=reopen>Was AGREED at <b>{t['reopened_from']}</b>, "
+                  f"now re-opened.</div>" if t.get("reopened_from") else "")
         rows.append(
             f"<tr class='{t['state']}'><td><b>{t['key']}</b><br><small>{t['description']}</small></td>"
             f"<td class=st>{t['state']}</td><td>{t['agreed_value'] or '&mdash;'}</td>"
-            f"<td>{quotes}{note}</td></tr>"
+            f"<td>{quotes}{note}{reopen}</td></tr>"
         )
     blocked = s["blocked"]
-    banner = (
-        "<div class='ok'>All discussed terms AGREED &mdash; safe to draft.</div>"
-        if s["drafting_safe"] else
-        "<div class='stop'><b>DO NOT DRAFT THESE CLAUSES.</b> Not agreed: "
-        + ", ".join(blocked or [t["key"] for t in s["terms"] if t["state"] not in ("AGREED", "OPEN")]) +
-        ". Both parties said yes to different things, gave a soft non-answer, a "
-        "term is still only proposed by one side, or it was parked after repeated "
-        "deadlock.</div>"
-    )
+    undiscussed = s.get("undiscussed") or []
+    # Disagreement and silence are different failures: one is a fight over a
+    # clause, the other is a clause that was never written at all.
+    if s["drafting_safe"]:
+        banner = "<div class='ok'>All discussed terms AGREED &mdash; safe to draft.</div>"
+    else:
+        parts = []
+        if blocked:
+            parts.append(
+                "<div class='stop'><b>DO NOT DRAFT THESE CLAUSES.</b> Disagreed: "
+                + ", ".join(blocked) +
+                ". Both parties said yes to different things, gave a soft "
+                "non-answer, a term is still only proposed by one side, or it "
+                "was parked after repeated deadlock.</div>"
+            )
+        if undiscussed:
+            parts.append(
+                "<div class='stop'><b>MISSING FROM THE AGREEMENT.</b> Never "
+                "discussed by either party: " + ", ".join(undiscussed) +
+                ". This is not a disagreement to resolve, it is a hole in the "
+                "document — the agreement is silent on these terms.</div>"
+            )
+        banner = "".join(parts)
     return f"""<!doctype html><meta charset=utf-8>
 <title>NyayBandhan &mdash; Lawyer Packet</title><style>
 body{{font:14px/1.6 system-ui;margin:40px;max-width:900px}}
@@ -426,6 +442,7 @@ tr.PARKED .st{{color:#fff;background:#555;padding:2px 6px;border-radius:3px}}
 tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}} tr.PARKED{{background:#f0f0f0}}
 .q{{display:block;margin:2px 0}} code{{background:#eee;padding:1px 4px}}
 .note{{margin-top:6px;padding:6px;background:#ffe9e9;border-left:3px solid #c00}}
+.reopen{{margin-top:6px;padding:6px;background:#fff8e1;border-left:3px solid #c60}}
 .stop{{padding:12px;background:#ffe9e9;border-left:4px solid #c00;margin-bottom:20px}}
 .ok{{padding:12px;background:#e9ffe9;border-left:4px solid #0a7;margin-bottom:20px}}
 @media print{{body{{margin:0}}}}

@@ -86,8 +86,17 @@ def _blocked(neg: Negotiation) -> list[dict]:
             reason = (f"{t.key}: the parties attempted this term ({t.attempts} "
                       f"attempt(s)) and could not agree, so it was set aside. "
                       f"Needs a human decision before signing.")
+        elif t.state is TermState.OPEN:
+            # Never raised by either party - a hole in the contract, not a
+            # partial agreement. No quotes exist because nobody spoke.
+            reason = (f"{t.key}: never discussed by either party. This is not a "
+                      f"disagreement, it is a missing clause — the agreement is "
+                      f"silent on {t.description} and needs a human decision "
+                      f"before signing.")
         else:
             continue
+        if t.reopened_from:
+            reason += f" (was AGREED at {t.reopened_from}, since re-opened)"
         quotes = [
             f"{sarvam.PARTIES.get(p.party, {}).get('name', p.party)} "
             f"({sarvam.PARTIES.get(p.party, {}).get('label', p.lang)}): "

@@ -50,10 +50,41 @@ def test_quotes_survive_untranslated_when_lawyer_lang_not_en(monkeypatch):
     monkeypatch.setattr(drafter.sarvam, "translate", _fake_translate)
     neg = _neg_with(TermState.PARKED, attempts=1)
     out = asyncio.run(drafter.draft(neg, "hi-IN", []))
-    q = next(q for q in out.open_questions if "TRANSLATED" in q["reason"])
+    q = next(q for q in out.open_questions if "TRANSLATED" in q["reason"] and q["quotes"])
     assert any("tenant will paint" in quote for quote in q["quotes"]), q["quotes"]
     assert any("no I will paint" in quote for quote in q["quotes"]), q["quotes"]
     assert not any("TRANSLATED" in quote for quote in q["quotes"])
+
+
+def test_open_term_is_undiscussed_and_blocks_ready():
+    # painting was never touched -> still OPEN by default (no proposals at all).
+    neg = Negotiation(session_id="test")
+    out = asyncio.run(drafter.draft(neg, "en-IN", []))
+    assert any("painting" in q["reason"] and "never discussed" in q["reason"]
+               for q in out.open_questions), out.open_questions
+    assert not out.ready
+    # nobody spoke, so there is nothing to quote for an undiscussed term.
+    q = next(q for q in out.open_questions if "painting" in q["reason"])
+    assert q["quotes"] == []
+
+
+def test_reopened_term_shows_prior_agreed_value():
+    neg = _neg_with(TermState.HEDGED)
+    neg.terms["painting"].reopened_from = "tenant"
+    out = asyncio.run(drafter.draft(neg, "en-IN", []))
+    q = next(q for q in out.open_questions if "painting" in q["reason"])
+    assert "AGREED at tenant" in q["reason"], q["reason"]
+
+
+def test_all_agreed_sheet_yields_ready(monkeypatch):
+    monkeypatch.setattr(drafter.llm, "complete_with_tools", _no_llm)
+    neg = Negotiation(session_id="test")
+    for t in neg.terms.values():
+        t.state = TermState.AGREED
+        t.agreed_value = "x"
+        t.proposals = [Proposal("p1", "x", "x", "en-IN", "propose", 0)]
+    out = asyncio.run(drafter.draft(neg, "en-IN", []))
+    assert out.ready, out.open_questions
 
 
 if __name__ == "__main__":
