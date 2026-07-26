@@ -5,7 +5,7 @@
 No pytest, no fixtures. If this passes, the scored core is sound and any remaining
 bug is in the API plumbing - which verify.py covers.
 """
-from app.mediator import Negotiation, TermState
+from app.mediator import Negotiation, TermState, _same
 
 
 def test_clean_agreement():
@@ -105,6 +105,18 @@ def test_transcript_history_respects_limit():
 def test_transcript_history_empty_is_safe():
     from app.mediator import Negotiation
     assert isinstance(Negotiation().transcript_history(), str)
+
+
+def test_norm_strips_currency_and_unit_noise_words():
+    assert _same("15000", "15000 rupees")
+    assert _same("15000", "Rs 15000")
+    assert _same("11 months", "11 month")
+
+
+def test_norm_never_strips_fixed_or_actual():
+    """'fixed'/'actual' are the exact distinction this system exists to catch -
+    stripping them as noise would collapse a real dispute into a false match."""
+    assert not _same("500", "fixed 500")
 
 
 def test_accepting_a_hedge_does_not_create_agreement():

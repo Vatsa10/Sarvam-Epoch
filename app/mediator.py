@@ -211,8 +211,14 @@ def _same(a: str, b: str) -> bool:
     return bool(na) and na == nb
 
 
+_NOISE = ("rupees", "rupee", "inr", "rs", "permonth", "monthly", "months", "month", "days", "day")
+
+
 def _norm(s: str) -> str:
-    return "".join(ch for ch in s.lower() if ch.isalnum())
+    t = "".join(ch for ch in s.lower() if ch.isalnum())
+    for w in _NOISE:
+        t = t.replace(w, "")
+    return t
 
 
 # ---------- extraction ----------
