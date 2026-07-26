@@ -40,7 +40,16 @@ def classify(msg: dict) -> tuple[str, str]:
         text = ((msg.get("data") or {}).get("transcript") or "").strip()
         if not text:
             return ("ignore", "")
-        return ("final" if (msg.get("data") or {}).get("is_final") else "partial", text)
+        # VERIFIED against real socket output, not assumed: Saaras sends ONE data
+        # frame per speech segment and it carries the complete transcript. There is
+        # no `is_final` field on the wire at all.
+        #
+        # This module used to read data.is_final, get None, and label EVERY
+        # transcript a partial - so nothing was ever appended to the turn buffer,
+        # talk_done always drained empty, and every turn died as "nothing was picked
+        # up" while a perfectly good transcript sat on screen greyed out as pending.
+        # A data frame with text IS the final.
+        return ("final", text)
 
     if kind == "events":
         signal = ((msg.get("data") or {}).get("signal_type") or "").upper()
