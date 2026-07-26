@@ -69,7 +69,21 @@ export const useMeetStore = create<MeetState>((set, get) => ({
         return;
 
       case "participant_joined":
-        set({ other: { party_id: evt.party_id, name: evt.name, lang: evt.lang } });
+        set({
+          other: {
+            party_id: evt.party_id, name: evt.name, lang: evt.lang,
+            out_lang: evt.out_lang ?? evt.lang,
+          },
+        });
+        return;
+
+      case "out_lang":
+        // Either side may switch what they read/hear mid-call.
+        set((s) => ({
+          me: s.me && s.me.party_id === evt.party_id ? { ...s.me, out_lang: evt.lang } : s.me,
+          other: s.other && s.other.party_id === evt.party_id
+            ? { ...s.other, out_lang: evt.lang } : s.other,
+        }));
         return;
 
       case "participant_left":

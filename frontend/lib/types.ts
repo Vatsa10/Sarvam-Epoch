@@ -44,7 +44,9 @@ export type Sheet = {
   blocked: string[];
 };
 
-export type PartyInfo = { party_id: string; name: string; lang: string };
+// `lang` is what they SPEAK (STT source); `out_lang` is what they SEE/HEAR
+// (captions + TTS target). Absent out_lang means "same as lang".
+export type PartyInfo = { party_id: string; name: string; lang: string; out_lang?: string };
 
 export type LogEntry =
   | { kind: "note"; id: string; from: string; lang: string; text: string; final: boolean }
@@ -58,7 +60,8 @@ export type ServerEvent =
       type: "joined"; you: PartyInfo; other: PartyInfo | null; sheet: Sheet;
       turn_holder: string; floor_open: boolean;
     }
-  | { type: "participant_joined"; party_id: string; name: string; lang: string }
+  | { type: "participant_joined"; party_id: string; name: string; lang: string; out_lang?: string }
+  | { type: "out_lang"; party_id: string; lang: string }
   | { type: "participant_left"; party_id: string; name: string }
   | { type: "note"; final: boolean; from: string; lang: string; text: string }
   | {
