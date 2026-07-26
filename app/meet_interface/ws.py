@@ -105,7 +105,13 @@ async def ws_room(client: WebSocket, code: str) -> None:
     url = stt_stream.build_ws_url(me.lang)
 
     try:
-        async with websockets.connect(url, additional_headers=stt_stream.WS_HEADERS) as up:
+        # ping_interval keeps the upstream alive through the silence between turns.
+        # A negotiation has long gaps - people think before they answer - and an
+        # idle-closed STT socket used to take the participant's whole session with it.
+        async with websockets.connect(
+            url, additional_headers=stt_stream.WS_HEADERS,
+            ping_interval=20, ping_timeout=20, close_timeout=5,
+        ) as up:
             # Shared with pump_down via closure; reset on every talk_start,
             # drained on talk_done. A dict (not a bare list rebind) so both
             # tasks always see the current buffer without `nonlocal` juggling.
@@ -177,7 +183,32 @@ async def ws_room(client: WebSocket, code: str) -> None:
                             "from": me.name, "lang": listener.out_lang, "text": shown,
                         })
 
-            await asyncio.gather(pump_up(), pump_down())
+            # pump_down ending means the UPSTREAM died, not the user. Tearing the
+            # browser socket down there would eject them from the room over a
+            # Sarvam-side timeout - which is exactly what was happening. Wait on
+            # pump_up (the real user connection) and let a dead upstream degrade
+            # to "captions stopped" instead of "you have left the call".
+            up_task = asyncio.ensure_future(pump_up())
+            down_task = asyncio.ensure_future(pump_down())
+            try:
+                done, pending = await asyncio.wait(
+                    {up_task, down_task}, return_when=asyncio.FIRST_COMPLETED)
+                if down_task in done and up_task not in done:
+                    exc = down_task.exception()
+                    await _send(room.code, me.party_id, {
+                        "type": "error",
+                        "text": "Speech recognition dropped. Rejoin the room to "
+                                "restore captions — the term sheet is safe.",
+                    })
+                    if exc is not None:
+                        print(f"[meet] upstream STT closed for {me.party_id}: "
+                              f"{type(exc).__name__}")
+                    await up_task          # keep serving the user until THEY leave
+            finally:
+                for task in (up_task, down_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(up_task, down_task, return_exceptions=True)
 
     except WebSocketDisconnect:
         pass
