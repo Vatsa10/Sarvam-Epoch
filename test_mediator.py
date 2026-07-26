@@ -144,6 +144,60 @@ def test_cannot_agree_with_your_own_proposal():
     assert n.terms["rent"].agreed_value is None
 
 
+
+def test_implausible_amount_raises_a_doubt_instead_of_recording_it():
+    """Nobody rents for 17 rupees. "Seventeen" means seventeen thousand, and
+    recording 17 silently becomes a nonsense contract clause."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17",
+                      "verbatim": "17", "stance": "propose"}], 0)
+    t = n.terms["rent"]
+    assert t.doubt and "17000" in t.doubt
+    assert t.agreed_value is None
+    assert t.state is TermState.PROPOSED
+    assert "rent" in flagged
+
+
+def test_doubt_clears_once_a_plausible_amount_is_given():
+    from app.mediator import Negotiation
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17",
+            "verbatim": "17", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 1)
+    assert n.terms["rent"].doubt is None
+
+
+def test_counter_offer_is_not_divergence():
+    """Open haggling is the opposite of divergence. DIVERGED means both sides think
+    they agreed; a counter-offer means both sides know they have not."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "pathinezhayiram", "stance": "propose"}], 0)
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "14000",
+                      "verbatim": "chaud hajaar", "stance": "counter"}], 1)
+    t = n.terms["rent"]
+    assert t.state is TermState.PROPOSED
+    assert t.state is not TermState.DIVERGED
+    assert t.divergence_note is None
+    assert t.agreed_value is None
+    assert flagged == []
+
+
+def test_magnitude_check_leaves_explicit_units_alone():
+    """'500 fixed' for maintenance is a real answer, not a shorthand - do not
+    second-guess a value that carries words."""
+    from app.mediator import magnitude_doubt
+    assert magnitude_doubt("maintenance", "actual") is None
+    assert magnitude_doubt("maintenance", "fixed 500") is None
+    assert magnitude_doubt("rent", "17000") is None
+    assert magnitude_doubt("duration", "11") is None      # no range for duration
+    assert magnitude_doubt("rent", "17") == "17000"
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

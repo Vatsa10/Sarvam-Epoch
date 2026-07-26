@@ -56,12 +56,45 @@ class Term:
     proposals: list[Proposal] = field(default_factory=list)
     agreed_value: str | None = None
     divergence_note: str | None = None
+    doubt: str | None = None   # magnitude question awaiting an answer
 
     def latest_by(self, party: str) -> Proposal | None:
         for p in reversed(self.proposals):
             if p.party == party:
                 return p
         return None
+
+
+# Plausible monthly rupee ranges. A stated amount far below the floor is almost
+# never literal - people say "seventeen" and mean seventeen thousand. Recording
+# rent = 17 is not a small error, it is a nonsense contract, so the system must
+# ask before it writes anything down.
+PLAUSIBLE = {
+    "rent":        (1500, 1_000_000),
+    "deposit":     (3000, 5_000_000),
+    "maintenance": (100, 200_000),
+}
+
+
+def magnitude_doubt(term_key: str, value: str) -> str | None:
+    """Return a suggested reading when a bare number is implausibly small.
+
+    "17" for rent -> "17000". Returns None when the value is fine, non-numeric,
+    or carries an explicit unit we should not second-guess.
+    """
+    lo, _hi = PLAUSIBLE.get(term_key, (None, None))
+    if lo is None:
+        return None
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits or digits != "".join(ch for ch in value if ch.isalnum()):
+        return None                      # has words attached - trust it
+    n = int(digits)
+    if n <= 0 or n >= lo:
+        return None
+    for mult in (1000, 100):             # seventeen -> 17000, then 1700
+        if lo <= n * mult:
+            return str(n * mult)
+    return None
 
 
 @dataclass
@@ -114,6 +147,21 @@ class Negotiation:
             )
             term.proposals.append(prop)
 
+            # Before anything is recorded: is this number even possible? "17" for a
+            # monthly rent is not a cheap flat, it is a misheard "seventeen thousand".
+            if prop.stance in ("propose", "counter", "accept"):
+                likely = magnitude_doubt(key, prop.value)
+                if likely:
+                    term.doubt = (
+                        f"{party} said '{prop.value}' for {key} — that is implausibly "
+                        f"low. Confirm whether they mean {likely}."
+                    )
+                    term.state = TermState.PROPOSED
+                    term.agreed_value = None
+                    needs_interjection.append(key)
+                    continue
+                term.doubt = None
+
             if prop.stance == "hedge":
                 term.state = TermState.HEDGED
                 term.agreed_value = None
@@ -121,6 +169,15 @@ class Negotiation:
 
             elif prop.stance == "reject":
                 term.state = TermState.REJECTED
+                term.agreed_value = None
+                term.divergence_note = None
+
+            elif prop.stance == "counter":
+                # Explicit haggling: "17 is too much, I'll give you 14". Both sides
+                # KNOW they disagree, so this is emphatically NOT divergence -
+                # divergence is a HIDDEN disagreement where both said yes. Treating
+                # a counter-offer as DIVERGED empties the word of meaning.
+                term.state = TermState.PROPOSED
                 term.agreed_value = None
                 term.divergence_note = None
 
@@ -189,6 +246,7 @@ class Negotiation:
                     "state": t.state.value,
                     "agreed_value": t.agreed_value,
                     "divergence_note": t.divergence_note,
+                    "doubt": t.doubt,
                     "proposals": [asdict(p) for p in t.proposals],
                 }
                 for t in self.terms.values()

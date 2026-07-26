@@ -315,19 +315,35 @@ async def listen(mediate: bool = True) -> None:
             res = await agent.run_turn(neg, party, me["lang"], transcript,
                                        len(neg.turns), gloss=gloss)
 
-            # What the agent says is decided by what just happened to the sheet.
-            if res.clarification:
-                spoken_en, why = res.clarification, "asks"
+            # What the agent says, and WHO it says it to, is decided by what just
+            # happened to the sheet.
+            relay = (gloss or transcript).strip()
+            doubt = next((t.doubt for t in neg.terms.values() if t.doubt), None)
+
+            if doubt:
+                # A magnitude question goes BACK TO THE SPEAKER, in the speaker's own
+                # language, and the turn is NOT relayed - no point passing on a number
+                # we do not believe. This is the "you said seventeen - do you mean
+                # seventeen thousand?" case.
+                spoken_en, target, why = (
+                    res.clarification or f"{doubt} Ask which they mean.",
+                    me, "asks back")
+            elif res.clarification:
+                spoken_en, target, why = res.clarification, other, "asks"
             elif res.flagged:
-                spoken_en, why = (
-                    f"Wait — you two have not actually agreed on {', '.join(res.flagged)}.",
-                    "flags")
+                # Relay the substance FIRST, then flag. Saying only "you have not
+                # agreed" drops the actual offer, which is the one thing the listener
+                # needed to hear.
+                spoken_en, target, why = (
+                    f"{relay} - but note, you two have not actually agreed on "
+                    f"{', '.join(res.flagged)}.",
+                    other, "relays + flags")
             else:
-                spoken_en, why = gloss or transcript, "relays"
+                spoken_en, target, why = relay, other, "relays"
 
             # formal, not code-mixed: this line gets SPOKEN, and stranded English
             # words mid-sentence sound wrong out of Bulbul.
-            spoken = await sv.translate(spoken_en, other["lang"], "en-IN",
+            spoken = await sv.translate(spoken_en, target["lang"], "en-IN",
                                         mode="formal") or spoken_en
 
             neg.turns.append(Turn(idx=len(neg.turns), party=party, lang=me["lang"],

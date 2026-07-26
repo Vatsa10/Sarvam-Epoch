@@ -23,7 +23,12 @@ TOOLS = [
                       "amounts. For maintenance distinguish 'fixed 500' from 'actual'."},
             "verbatim": {"type": "string", "description":
                          "Their exact words for this term, original script, unedited."},
-            "stance": {"type": "string", "enum": ["propose", "accept", "reject", "hedge"]},
+            "stance": {"type": "string",
+                       "enum": ["propose", "counter", "accept", "reject", "hedge"],
+                       "description":
+                       "counter = they reject the number on the table and name a "
+                       "different one ('17 is too much, I'll give 14'). That is open "
+                       "haggling, NOT agreement and NOT divergence."},
         }, "required": ["term", "value", "verbatim", "stance"]}}},
     {"type": "function", "function": {
         "name": "flag_divergence",
@@ -60,6 +65,25 @@ detecting that is your entire job. Do not smooth it over.
 
 A hedge ("we'll see", "dekhte hain", "nokkaam", "joiye chhe") is NOT an accept. Never
 upgrade a hedge.
+
+COUNTER-OFFER vs DIVERGENCE — do not confuse these, they are opposites:
+- `counter` is OPEN disagreement. The speaker rejects the number on the table and names
+  a different one: "seventeen is too much, I can give you fourteen". Both sides know
+  they disagree. This is ordinary haggling. Use `counter`. NEVER call flag_divergence.
+- DIVERGENCE is HIDDEN disagreement. Both sides believe they agreed, but meant different
+  things: one says "maintenance separate" meaning actual cost, the other agrees meaning a
+  fixed 500. Nobody realises. THAT is what flag_divergence is for.
+If the speaker voices any objection to the other party's number, it is `counter`.
+A counter-offer needs no clarifying question — the speaker was perfectly clear. Do not
+ask them to confirm a number they just stated explicitly ("fourteen thousand" needs no
+"did you mean fourteen thousand?"). Asking about something unambiguous makes the system
+look deaf, and you only get one question per turn — spend it where it is needed.
+
+AMOUNTS AND MAGNITUDE. People state rent in shorthand: "seventeen" means seventeen
+thousand, not seventeen rupees. If a stated amount would be absurd taken literally — a
+monthly rent of 17, a deposit of 50 — do NOT record it. Call request_clarification and
+ask which magnitude they mean ("seventeen thousand, or seventeen hundred?"). Recording a
+nonsense number is worse than asking, because it silently becomes a contract clause.
 
 Then write a one-sentence plain-English summary of what the speaker said.
 
