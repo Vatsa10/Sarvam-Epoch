@@ -277,7 +277,8 @@ def play(b64: str, barge_in: bool = True) -> bool:
     return interrupted
 
 
-async def say(text: str, lang: str, speaker: str, client: SarvamAI) -> None:
+async def say(text: str, lang: str, speaker: str, client: SarvamAI,
+              pace: float = 1.0) -> None:
     """Speak text aloud in `lang`. Never fatal — a silent turn beats a crash."""
     if not text.strip():
         return
@@ -285,6 +286,7 @@ async def say(text: str, lang: str, speaker: str, client: SarvamAI) -> None:
         r = client.text_to_speech.convert(
             text=text[:2500], target_language_code=lang,
             model="bulbul:v3", speaker=speaker, speech_sample_rate=22050,
+            pace=pace,
         )
         if r.audios:
             play(r.audios[0])
@@ -416,7 +418,12 @@ async def listen(mediate: bool = True) -> None:
                                   interjection=res.clarification))
 
             print(f"  {why} → {other['name']} ({other['label']}): {spoken}")
-            await say(spoken, other["lang"], other["speaker"], client)
+            # Slower when the sheet just broke or a number is in doubt; brisker
+            # on a plain relay. Same policy the meet relay uses.
+            await say(spoken, target["lang"], target["speaker"], client,
+                      pace=sv.pace_for(sensitive=bool(doubt or res.flagged
+                                                     or res.clarification),
+                                       relaying=(why == "relays")))
 
             _print_sheet(neg.sheet())
             party = other_id

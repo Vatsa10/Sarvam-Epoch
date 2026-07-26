@@ -22,6 +22,19 @@ def test_urls_present():
     assert sarvam.TRANSLATE_URL == "https://api.sarvam.ai/translate"
 
 
+
+def test_pace_policy():
+    """Bulbul v3 has no emotion knob - pace and voice ARE the expressive surface,
+    so the emotional read has to live here."""
+    from app import sarvam
+    assert sarvam.pace_for(sensitive=True) == 0.85
+    assert sarvam.pace_for(sensitive=True, relaying=True) == 0.85, "sensitive wins"
+    assert sarvam.pace_for(sensitive=False, relaying=True) == 1.05
+    assert sarvam.pace_for(sensitive=False) == 1.0
+    for v in (sarvam.PACE_SENSITIVE, sarvam.PACE_RELAY, sarvam.PACE_NORMAL):
+        assert 0.5 <= v <= 2.0, "bulbul v3 accepts pace 0.5-2.0"
+
+
 if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_"):

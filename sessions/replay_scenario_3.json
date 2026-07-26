@@ -17,7 +17,7 @@
           "lang": "gu-IN",
           "stance": "accept",
           "turn": 0,
-          "ts": 1785056669.007168
+          "ts": 1785056777.2953448
         },
         {
           "party": "sreedev",
@@ -26,7 +26,7 @@
           "lang": "ml-IN",
           "stance": "accept",
           "turn": 1,
-          "ts": 1785056670.5363572
+          "ts": 1785056779.6962695
         }
       ]
     },
@@ -54,7 +54,7 @@
           "lang": "gu-IN",
           "stance": "accept",
           "turn": 2,
-          "ts": 1785056671.7263768
+          "ts": 1785056783.480243
         },
         {
           "party": "sreedev",
@@ -63,7 +63,7 @@
           "lang": "ml-IN",
           "stance": "accept",
           "turn": 3,
-          "ts": 1785056673.008202
+          "ts": 1785056784.8360445
         }
       ]
     },
@@ -103,7 +103,7 @@
       "transcript": "ભાડું બાર હજાર રૂપિયા રહેશે.",
       "relay_text": "The fare will be twelve thousand rupees.",
       "interjection": null,
-      "ts": 1785056669.007187
+      "ts": 1785056777.2953627
     },
     {
       "idx": 1,
@@ -112,7 +112,7 @@
       "transcript": "പന്ത്രണ്ടായിരം രൂപ, സമ്മതം.",
       "relay_text": "Twelve thousand, please.",
       "interjection": null,
-      "ts": 1785056670.5363917
+      "ts": 1785056779.6963031
     },
     {
       "idx": 2,
@@ -121,7 +121,7 @@
       "transcript": "કરાર અગિયાર મહિના માટે રહેશે.",
       "relay_text": "The contract will be for eleven months.",
       "interjection": null,
-      "ts": 1785056671.7263896
+      "ts": 1785056783.4802544
     },
     {
       "idx": 3,
@@ -130,7 +130,7 @@
       "transcript": "പതിനൊന്ന് മാസം, ശരി.",
       "relay_text": "Still undiscussed: deposit, maintenance, notice_period, painting",
       "interjection": null,
-      "ts": 1785056673.0082238
+      "ts": 1785056784.8360677
     }
   ],
   "blocked": []

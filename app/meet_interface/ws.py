@@ -226,18 +226,45 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     idx = len(room.negotiation.turns)
 
     speaker_lang = room.participants[party_id].lang
+
+    # English gloss first. Without it gpt-4o-mini misreads Indic numerals - measured,
+    # it turned Malayalam "പതിനയ്യായിരം" (15000) into 17000 and invented a divergence
+    # between two parties who had agreed. /translate is a separate rate bucket, so
+    # this costs nothing from the reasoning budget.
     try:
-        res = await agent.run_turn(room.negotiation, party_id, speaker_lang, transcript, idx)
+        gloss = await sarvam.translate(transcript, "en-IN", speaker_lang)
+    except Exception:  # noqa: BLE001
+        gloss = ""
+
+    try:
+        res = await agent.run_turn(room.negotiation, party_id, speaker_lang,
+                                   transcript, idx, gloss=gloss or None)
     except Exception as e:  # noqa: BLE001
         for pid in room.participants:
             await _send(room.code, pid, {"type": "error", "text": f"agent failed: {e}"})
         return
 
-    spoken = res.clarification or res.summary
+    # res.summary is plain ENGLISH by design (see agent.SYSTEM). Feeding it straight
+    # to Bulbul with an Indian target language makes the listener hear English read
+    # in a Malayalam voice - translate before speaking.
+    spoken = res.clarification or res.summary or gloss
     audio = ""
     if spoken and other is not None:
         try:
-            audio = await sarvam.tts(spoken, other.lang, languages.speaker(other.lang))
+            spoken = await sarvam.translate(spoken, other.lang, "en-IN",
+                                            mode="formal") or spoken
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # Slower when the sheet just broke or a value is in doubt - a mediator
+            # that flags a divergence at the same clip as a routine relay sounds
+            # like it did not notice.
+            audio = await sarvam.tts(
+                spoken, other.lang, languages.speaker(other.lang),
+                pace=sarvam.pace_for(
+                    sensitive=bool(res.flagged or res.clarification),
+                    relaying=not (res.flagged or res.clarification)),
+            )
         except Exception:  # noqa: BLE001
             audio = ""
 

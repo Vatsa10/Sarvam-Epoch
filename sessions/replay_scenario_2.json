@@ -26,16 +26,16 @@
           "lang": "gu-IN",
           "stance": "accept",
           "turn": 0,
-          "ts": 1785056666.0718536
+          "ts": 1785056774.8421636
         },
         {
           "party": "sreedev",
-          "value": "0",
-          "verbatim": "അത്... നമുക്ക് നോക്കാം, പിന്നെ പറയാം.",
+          "value": "50000",
+          "verbatim": "ഡിപോസിറ്റ് പചാസ്സ് ആയിരം രൂപ",
           "lang": "ml-IN",
           "stance": "hedge",
           "turn": 1,
-          "ts": 1785056667.3842118
+          "ts": 1785056776.0898247
         }
       ]
     },
@@ -84,7 +84,7 @@
       "transcript": "ડિપોઝિટ પચાસ હજાર રૂપિયા જોઈએ છે.",
       "relay_text": "Deposit of fifty thousand rupees is required.",
       "interjection": null,
-      "ts": 1785056666.071876
+      "ts": 1785056774.8421824
     },
     {
       "idx": 1,
@@ -93,7 +93,7 @@
       "transcript": "അത്... നമുക്ക് നോക്കാം, പിന്നെ പറയാം.",
       "relay_text": "That... we'll have to watch and see then.",
       "interjection": null,
-      "ts": 1785056667.3842273
+      "ts": 1785056776.0898466
     }
   ],
   "blocked": [

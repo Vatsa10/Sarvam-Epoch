@@ -17,7 +17,7 @@
           "lang": "gu-IN",
           "stance": "accept",
           "turn": 0,
-          "ts": 1785056660.1211376
+          "ts": 1785056768.8320518
         },
         {
           "party": "sreedev",
@@ -26,7 +26,7 @@
           "lang": "ml-IN",
           "stance": "accept",
           "turn": 1,
-          "ts": 1785056661.7561133
+          "ts": 1785056770.4629593
         }
       ]
     },
@@ -53,7 +53,7 @@
       "description": "Who pays maintenance, and is it fixed or actual",
       "state": "DIVERGED",
       "agreed_value": null,
-      "divergence_note": "Sreedev accepts maintenance as fixed 500, while Vatsa proposed actual costs.",
+      "divergence_note": "Sreedev accepts maintenance as separate but means a fixed amount of 500, while Vatsa's proposal was based on actual costs.",
       "doubt": null,
       "proposals": [
         {
@@ -63,7 +63,7 @@
           "lang": "gu-IN",
           "stance": "accept",
           "turn": 2,
-          "ts": 1785056663.0525036
+          "ts": 1785056771.9944434
         },
         {
           "party": "sreedev",
@@ -72,7 +72,7 @@
           "lang": "ml-IN",
           "stance": "accept",
           "turn": 3,
-          "ts": 1785056664.7803876
+          "ts": 1785056773.7438755
         }
       ]
     },
@@ -103,7 +103,7 @@
       "transcript": "ભાડું પંદર હજાર રૂપિયા રહેશે.",
       "relay_text": "The rent will be fifteen thousand rupees.",
       "interjection": null,
-      "ts": 1785056660.121163
+      "ts": 1785056768.8320756
     },
     {
       "idx": 1,
@@ -112,7 +112,7 @@
       "transcript": "പതിനയ്യായിരം ശരിയാണ്, സമ്മതം.",
       "relay_text": "Fifteen thousand is correct, I agree.",
       "interjection": null,
-      "ts": 1785056661.7561605
+      "ts": 1785056770.4630182
     },
     {
       "idx": 2,
@@ -121,7 +121,7 @@
       "transcript": "મેન્ટેનન્સ અલગથી આપવાનું રહેશે, જે પણ ખર્ચ થાય એ પ્રમાણે.",
       "relay_text": "Maintenance is paid separately, depending on the actual cost incurred.",
       "interjection": null,
-      "ts": 1785056663.052523
+      "ts": 1785056771.9944718
     },
     {
       "idx": 3,
@@ -130,7 +130,7 @@
       "transcript": "ശരി, മെയിന്റനൻസ് വേറെ. മാസം 500 രൂപ ഫിക്സഡ്.",
       "relay_text": "Okay, maintenance is a different thing. Rs. 500 per month, fixed.",
       "interjection": null,
-      "ts": 1785056664.7804298
+      "ts": 1785056773.7439227
     }
   ],
   "blocked": [

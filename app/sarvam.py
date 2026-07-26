@@ -61,6 +61,22 @@ async def stt(audio: bytes, filename: str = "turn.webm", language_code: str | No
     return r.json()
 
 
+# Bulbul v3 has no emotion parameter - `pace` and voice choice are the whole
+# expressive surface. So pace carries the emotional read: a mediator that says
+# "you two have not actually agreed" at the same clip as a routine relay sounds
+# like it did not notice. Slower on the sensitive beat, brisker on a plain relay.
+PACE_SENSITIVE = 0.85   # a divergence, a hedge, a question about money
+PACE_RELAY     = 1.05   # routine pass-through, keep the call moving
+PACE_NORMAL    = 1.0
+
+
+def pace_for(sensitive: bool, relaying: bool = False) -> float:
+    """One policy, used by both the terminal harness and the meet relay."""
+    if sensitive:
+        return PACE_SENSITIVE
+    return PACE_RELAY if relaying else PACE_NORMAL
+
+
 async def tts(text: str, target_language_code: str, speaker: str, pace: float = 1.0) -> str:
     """Text -> base64 wav. Bulbul v3 exposes only speaker + pace; there is no emotion
     knob, so tone has to live in the wording of `text` itself."""
