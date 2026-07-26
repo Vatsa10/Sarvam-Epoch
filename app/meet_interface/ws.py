@@ -335,6 +335,56 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
 
     sheet = room.negotiation.sheet()
     speaker_name = room.participants[party_id].name
+
+    async def _tell_both(term_key: str, text: str) -> None:
+        """Same escalation-ladder pattern as the deadlock messages below: plain
+        English drafted once, translated per listener, English on failure."""
+        for pid, p_obj in room.participants.items():
+            out = text
+            if p_obj.out_lang != "en-IN":
+                try:
+                    out = await sarvam.translate(text, p_obj.out_lang, "en-IN",
+                                                  mode="formal") or text
+                except Exception:  # noqa: BLE001
+                    pass
+            await _send(room.code, pid, {"type": "resolve", "term": term_key, "text": out})
+
+    # RE-OPENED TERM. A term that was SETTLED and just came undone is the single
+    # change most likely to end up in a signed document unnoticed - both parties
+    # must be told plainly, naming the value that was agreed and who reopened it.
+    for key in res.flagged:
+        term = room.negotiation.terms.get(key)
+        if term is not None and term.reopened_from is not None:
+            await _tell_both(key, (
+                f"IMPORTANT: {key} had already been SETTLED at "
+                f"'{term.reopened_from}', but {speaker_name} has just reopened it. "
+                f"It is no longer agreed."
+            ))
+
+    # ONE-SIDED ACCEPT. `accept` with no matching offer from the other side lands
+    # PROPOSED, never AGREED (mediator.py is already safe here) - but the
+    # accepting party still needs telling, once, that they agreed to nothing the
+    # other side actually offered.
+    for key, term in room.negotiation.terms.items():
+        if key in room.one_sided_warned:
+            continue
+        latest = term.latest_by(party_id)
+        if (latest is not None and latest.turn == idx and latest.stance == "accept"
+                and term.state == TermState.PROPOSED
+                and room.negotiation.one_sided(key)):
+            room.one_sided_warned.add(key)
+            text = (
+                f"You just agreed to {key}, but the other side has not actually "
+                f"proposed a value for it yet - nothing is really settled there."
+            )
+            out = text
+            if room.participants[party_id].out_lang != "en-IN":
+                try:
+                    out = await sarvam.translate(text, room.participants[party_id].out_lang,
+                                                  "en-IN", mode="formal") or text
+                except Exception:  # noqa: BLE001
+                    pass
+            await _send(room.code, party_id, {"type": "resolve", "term": key, "text": out})
     # Append-only turn log in the speaker's own words - see Room.transcript.
     room.transcript.append({
         "speaker_id": party_id, "speaker_name": speaker_name,
@@ -432,6 +482,18 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
                 if parked:
                     frame["parked"] = True
                 await _send(room.code, pid, frame)
+
+    # WRAP-UP. Every turn, tell both parties where the whole negotiation stands -
+    # complete once nothing is left to discuss, otherwise name what's still open.
+    all_settled = all(t.state in (TermState.AGREED, TermState.REJECTED, TermState.PARKED)
+                       for t in room.negotiation.terms.values())
+    if all_settled:
+        await _tell_both("_wrapup", "The negotiation is complete - every term is "
+                          "settled or parked, and the packet is ready.")
+    else:
+        pending = room.negotiation.undiscussed()
+        if pending:
+            await _tell_both("_wrapup", "Still to discuss: " + ", ".join(pending) + ".")
 
     if spoken and other is not None and voice:
         try:

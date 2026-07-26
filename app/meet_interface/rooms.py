@@ -70,6 +70,9 @@ class Room:
     # CONTRACT (consumed by the drafter): each entry is exactly
     # {"speaker_id": str, "speaker_name": str, "lang": str, "text": str, "ts": float}
     transcript: list[dict] = field(default_factory=list)
+    # Keys already warned as one-sided accepts - the warning is a one-time nudge,
+    # not a per-turn nag, so this dedupes it across the room's lifetime.
+    one_sided_warned: set[str] = field(default_factory=set)
 
     def other(self, party_id: str) -> Participant | None:
         for pid, p in self.participants.items():
