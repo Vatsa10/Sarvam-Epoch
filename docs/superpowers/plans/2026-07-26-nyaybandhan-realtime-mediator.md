@@ -1234,7 +1234,7 @@ git commit -m "feat: /replay endpoint and three evidence scenarios"
 
 ---
 
-### Task 9: Hidden mute and full-suite green
+### Task 9 (SUPERSEDED - UI work moved to Sreedev; runner survives as Task 14): Hidden mute and full-suite green
 
 **Files:**
 - Modify: `static/index.html`
@@ -1333,7 +1333,7 @@ git commit -m "feat: hidden mute shortcut and full test runner"
 ## Addendum — 12:55, direction change
 
 Sreedev owns UI and backend wiring from here. The remaining work is the **AI layer only**.
-Task 9's hidden-mute (UI) is dropped; its test runner survives into Task 11.
+Task 9's hidden-mute (UI) is dropped; its test runner survives into Task 14.
 
 **New global constraints:**
 - **Agent reasoning and tool calling run on `gpt-4o-mini`** via the OpenAI SDK. Sarvam keeps every
@@ -1348,7 +1348,7 @@ Task 9's hidden-mute (UI) is dropped; its test runner survives into Task 11.
 
 ---
 
-### Task 9: Pluggable LLM provider — gpt-4o-mini for reasoning
+### Task 12: Pluggable LLM provider — gpt-4o-mini for reasoning
 
 **Files:**
 - Create: `app/llm.py`
@@ -1494,7 +1494,7 @@ git commit -m "feat: run agent reasoning on gpt-4o-mini, Sarvam keeps speech"
 
 ---
 
-### Task 10: Turn-aware stateful context
+### Task 13: Turn-aware stateful context
 
 **Files:**
 - Modify: `app/mediator.py` (add `Negotiation.transcript_history`)
@@ -1659,7 +1659,7 @@ git commit -m "feat: attributed turn history so the agent never mixes up speaker
 
 ---
 
-### Task 11: Preflight and suite runner for both providers
+### Task 14: Preflight and suite runner for both providers
 
 **Files:**
 - Create: `run_tests.py`
