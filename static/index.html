@@ -74,6 +74,24 @@
 const $ = s => document.querySelector(s);
 let rec = null, chunks = [], busy = false;
 
+async function startCapture(onChunk){
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true}
+  });
+  const ctx = new AudioContext();
+  await ctx.audioWorklet.addModule('/pcm-worklet.js');
+  const src = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, 'pcm-worklet');
+  node.port.onmessage = e => onChunk(e.data);
+  src.connect(node);
+  return {stop(){
+    node.port.onmessage = null;
+    node.disconnect(); src.disconnect();
+    stream.getTracks().forEach(t => t.stop());
+    ctx.close();
+  }};
+}
+
 async function micFor(party, btn){
   const stream = await navigator.mediaDevices.getUserMedia({audio:true});
   const mr = new MediaRecorder(stream, {mimeType: pickMime()});
