@@ -378,19 +378,19 @@ async def replay(scenario: str) -> JSONResponse:
         return JSONResponse({"error": f"no scenario {scenario}"}, status_code=404)
 
     spec = json.loads(f.read_text(encoding="utf-8"))
-    global NEG
-    NEG = Negotiation(f"replay_{scenario}")
+    neg = Negotiation(f"replay_{scenario}")
 
     for i, t in enumerate(spec["turns"]):
-        res = await agent.run_turn(NEG, t["party"], sarvam.PARTIES[t["party"]]["lang"],
+        res = await agent.run_turn(neg, t["party"], sarvam.PARTIES[t["party"]]["lang"],
                                    t["transcript"], i)
-        NEG.turns.append(Turn(idx=i, party=t["party"],
+        spoken = res.clarification or res.summary
+        neg.turns.append(Turn(idx=i, party=t["party"],
                               lang=sarvam.PARTIES[t["party"]]["lang"],
                               transcript=t["transcript"],
-                              relay_text=res.summary, interjection=res.clarification))
+                              relay_text=spoken, interjection=res.clarification))
 
-    session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
-    sheet = NEG.sheet()
+    session.save(neg, SESSIONS / f"{neg.session_id}.json")
+    sheet = neg.sheet()
     actual = {t["key"]: t["state"] for t in sheet["terms"]}
     mismatches = [
         {"term": k, "expected": v, "actual": actual.get(k)}
