@@ -334,6 +334,7 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
     except Exception:  # noqa: BLE001
         gloss = ""
 
+
     # Who these two are, what they each came for, and what they settled the last
     # time they spoke. Best-effort by construction - no history must ever block a
     # live turn.
@@ -343,9 +344,14 @@ async def _finish_turn(room: rooms.Room, party_id: str, transcript: str) -> None
         preamble = ""
 
     try:
+        parties = {
+            pid: {"name": p.name, "lang": p.lang,
+                  "label": languages.label(p.lang) or p.lang}
+            for pid, p in room.participants.items()
+        }
         res = await agent.run_turn(room.negotiation, party_id, speaker_lang,
                                    transcript, idx, gloss=gloss or None,
-                                   preamble=preamble)
+                                   preamble=preamble, parties=parties)
     except Exception as e:  # noqa: BLE001
         for pid in room.participants:
             await _send(room.code, pid, {"type": "error", "text": f"agent failed: {e}"})

@@ -385,7 +385,7 @@ class Negotiation:
         term = self.terms.get(key)
         if term is None:
             return False
-        a, b = (term.latest_by(p) for p in sarvam.PARTIES)
+        a, b = (term.latest_by(p) for p in self._pair())
         return a is not None and b is not None and _same(a.value, b.value)
 
     def is_open_haggle(self, key: str) -> bool:
@@ -399,7 +399,7 @@ class Negotiation:
         term = self.terms.get(key)
         if term is None:
             return False
-        ids = list(sarvam.PARTIES)
+        ids = list(self._pair())
         a, b = (term.latest_by(p) for p in ids)
         if a is None or b is None:
             return False
@@ -465,9 +465,17 @@ class Negotiation:
             lines.append(f"[turn {t.idx}] {who} ({lang}): {t.transcript}")
         return "\n".join(lines) or "(no prior turns - this is the first)"
 
+    def _pair(self) -> tuple[str, ...]:
+        """The two party ids for THIS negotiation.
+
+        A room uses "p1"/"p2"; the standalone demo uses sarvam.PARTIES keys. Every
+        pairwise check has to read the same source or it silently compares the
+        wrong two people - or, as happened live, raises KeyError('p1') mid-turn.
+        """
+        return self.parties if self.parties is not None else tuple(sarvam.PARTIES)
+
     def _other_party(self, party: str) -> str:
-        pool = self.parties if self.parties is not None else tuple(sarvam.PARTIES)
-        return next(p for p in pool if p != party)
+        return next((p for p in self._pair() if p != party), party)
 
     # ---------- views ----------
 

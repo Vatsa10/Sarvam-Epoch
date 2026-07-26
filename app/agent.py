@@ -103,7 +103,8 @@ restate their own position, that is `propose`, not `accept`."""
 
 
 def build_context(neg: Negotiation, party: str, transcript: str,
-                  gloss: str | None = None, preamble: str = "") -> str:
+                  gloss: str | None = None, preamble: str = "",
+                  parties: dict | None = None) -> str:
     """Everything the agent needs to attribute this utterance correctly.
 
     `gloss` is an English translation of the same utterance, and it is not a nicety.
@@ -114,9 +115,20 @@ def build_context(neg: Negotiation, party: str, transcript: str,
     the English gloss and quotes VERBATIM from the native script.
     """
     from . import sarvam
-    me = sarvam.PARTIES[party]
-    other_id = next(p for p in sarvam.PARTIES if p != party)
-    other = sarvam.PARTIES[other_id]
+    # A room keys its participants "p1"/"p2"; the standalone demo uses
+    # sarvam.PARTIES. Indexing the global blindly raised KeyError('p1') on the
+    # first real meet turn and surfaced to both users as "agent failed: 'p1'".
+    # Callers that know the real participants pass them in; everyone else falls
+    # back to the demo pair, and failing that to the ids themselves.
+    table = parties or sarvam.PARTIES
+    other_id = neg._other_party(party)
+
+    def _who(pid: str) -> dict:
+        info = table.get(pid) or sarvam.PARTIES.get(pid) or {}
+        return {"name": info.get("name", pid),
+                "label": info.get("label", info.get("lang", "their language"))}
+
+    me, other = _who(party), _who(other_id)
 
     sheet = "\n".join(
         f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
@@ -249,7 +261,8 @@ def _parse_tool_calls(message: dict) -> list[dict]:
 
 async def run_turn(neg: Negotiation, party: str, lang: str,
                    transcript: str, turn_idx: int,
-                   gloss: str | None = None, preamble: str = "") -> TurnResult:
+                   gloss: str | None = None, preamble: str = "",
+                   parties: dict | None = None) -> TurnResult:
     """ONE model call per completed turn. Never called on a partial.
 
     Pass `gloss` (an English translation of `transcript`) whenever you can afford the
@@ -261,7 +274,7 @@ async def run_turn(neg: Negotiation, party: str, lang: str,
 
     message = await llm.complete_with_tools(
         system=SYSTEM,
-        user=build_context(neg, party, transcript, gloss, preamble),
+        user=build_context(neg, party, transcript, gloss, preamble, parties),
         tools=TOOLS,
     )
     res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message),
