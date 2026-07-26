@@ -34,6 +34,7 @@ export default function TermSheetPanel({
   className?: string;
 }) {
   const blocked = sheet?.blocked ?? [];
+  const undiscussed = sheet?.undiscussed ?? [];
   const [lawyerLang, setLawyerLang] = useState("en-IN");
   // Falls back to the ?code= the share link carries, so the button works even
   // where the room code isn't passed down as a prop.
@@ -81,6 +82,11 @@ export default function TermSheetPanel({
           Cannot draft: {blocked.join(", ")} — both sides said yes to different things, or hedged.
         </div>
       )}
+      {undiscussed.length > 0 && (
+        <div className="mx-4 mt-3 rounded-lg bg-amber-950 border border-amber-900 text-amber-300 text-xs px-3 py-2">
+          Cannot draft: {undiscussed.join(", ")} — never discussed by either side, a hole in the agreement.
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
@@ -97,6 +103,11 @@ export default function TermSheetPanel({
                   {t.state}
                 </span>
               </div>
+              {t.reopened_from && (
+                <div className="mt-1 text-xs text-amber-300 bg-amber-950/60 border-l-2 border-amber-600 pl-2 py-1">
+                  Was agreed at &ldquo;{t.reopened_from}&rdquo;, now re-opened.
+                </div>
+              )}
               {t.divergence_note && (
                 <div className="mt-1 text-xs text-red-300 bg-red-950/60 border-l-2 border-red-600 pl-2 py-1">
                   {t.divergence_note}

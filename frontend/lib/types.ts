@@ -24,6 +24,7 @@ export type Term = {
   agreed_value: string | null;
   divergence_note: string | null;
   proposals: Proposal[];
+  reopened_from: string | null;
 };
 
 export type TurnRecord = {
@@ -42,6 +43,7 @@ export type Sheet = {
   terms: Term[];
   turns: TurnRecord[];
   blocked: string[];
+  undiscussed: string[];
 };
 
 // `lang` is what they SPEAK (STT source); `out_lang` is what they SEE/HEAR
