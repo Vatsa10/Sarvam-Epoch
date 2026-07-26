@@ -1,6 +1,9 @@
-// static/pcm-worklet.js
+// frontend/public/pcm-worklet.js
 // Downsamples the browser's native rate to 16kHz mono and emits Int16 PCM frames.
 // The STT WebSocket accepts wav/pcm only - webm/opus from MediaRecorder is rejected.
+// Ported verbatim from static/pcm-worklet.js (the push-to-talk demo's proven capture
+// path) - Next's static export serves anything under public/ at the site root, so
+// this loads at /pcm-worklet.js exactly like the vanilla-JS UI's copy does.
 class PCMWorklet extends AudioWorkletProcessor {
   constructor() {
     super();

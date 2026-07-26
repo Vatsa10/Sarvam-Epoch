@@ -1,6 +1,7 @@
 # NyayBandhan
 
-Two people. No common language. A mediator that refuses to record an agreement that isn't one.
+Two people. No common language. A live translated call with a mediator that refuses
+to record an agreement that isn't one.
 
 **Declared Sarvam parameter: VOICE EXPERIENCE.** One parameter. Extra APIs score zero.
 
@@ -10,21 +11,31 @@ Two people. No common language. A mediator that refuses to record an agreement t
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env      # paste the event API key
-python verify.py --no-stt   # PREFLIGHT - do this before writing any code
+copy .env.example .env      # paste the Sarvam API key + a Postgres DATABASE_URL
+
+cd frontend
+npm install
+npm run build                # static export -> frontend/out/
+cd ..
+
 uvicorn app.main:app --reload --port 8000
 ```
 
-Open http://localhost:8000
+Open `http://localhost:8000` — it redirects straight to the meet UI (`/meet`). Create
+a meeting, share the code (or the link), and join from a second tab/device.
+
+Optional hot-reload dev mode while iterating on frontend components: `npm run dev` in
+`frontend/` (port 3000) against the backend on 8000 — the one cross-origin case, which
+is why CORS is enabled for `http://localhost:3000` in `app/main.py`.
 
 ## The thesis
 
 A relay translates faithfully and *manufactures* the dispute it was built to prevent.
 
-Vatsa says maintenance is *alag* — separate, actual costs. Sreedev hears "separate" and
-agrees, meaning a fixed ₹500/month. **Both said yes. Both meant different things.** A
-translation layer passes both yeses through cleanly and neither party ever learns they
-diverged. Six months later that is a court case.
+One party says maintenance is *alag* — separate, actual costs. The other hears
+"separate" and agrees, meaning a fixed monthly amount. **Both said yes. Both meant
+different things.** A translation layer passes both yeses through cleanly and neither
+party ever learns they diverged. Six months later that is a court case.
 
 So the agent is not a translator. It tracks the *state of every term* and interjects —
 in both languages — the moment a mutual yes turns out to be two different yeses.
@@ -32,54 +43,44 @@ in both languages — the moment a mutual yes turns out to be two different yese
 `TermState.DIVERGED` is the state no pure translation layer can produce. That is the
 product.
 
-## Why this scores
-
-| Line | Wt | What earns it |
-|---|---|---|
-| JTBD | ×2.5 | The lawyer packet is emitted, every term AGREED or explicitly blocked, across 3 repeated negotiations |
-| **Voice Experience** | ×2.5 | Real Gujarati + Malayalam, mutually unintelligible, code-switched numbers; agent decides *when to interject vs relay*; hedge ≠ accept |
-| Creativity | ×1.5 | Mediator tracks agreement, not language. A tool that refuses to write the clause. |
-| Impact | ×1.5 | Rental/deposit disputes; inter-state migration makes no-common-language negotiation routine |
-| Memory | ×1 | Append-only turn log, sheet derived by replay, provenance per proposal, survives restart |
-| Delight | ×1 | Catches what both humans missed; blocks the clause instead of drafting a fake one |
-
-**Not** claimed: translation quality (no judge can verify it), realtime (turn-based
-push-to-talk — measure latency before ever saying "realtime").
-
 ## Architecture
 
 ```
-mic → Saaras STT → extract terms (Sarvam-30B, strict JSON)
-                       ↓
-                  state machine  ── DIVERGED / HEDGED? ──→ interject in BOTH languages
-                       ↓ no                                        ↓
-                  relay to other party ───────────────────→ Bulbul TTS → listener
-                       ↓
-              append-only turn log → /packet (print → PDF → lawyer)
+Party A mic ──WS──┐                            ┌── notes panel (term sheet + captions)
+                  ├──→  FastAPI relay  ──────→ ┤
+Party B mic ──WS──┘         │                  └── notes panel (term sheet + captions)
+                            │
+  per VAD segment:  Sarvam STT WS ──→ /translate ──→ live captions to the OTHER party
+                            │
+  on VAD end-of-turn:  sarvam-30b + tools ──→ mediator state ──→ both panels
+                            │
+                      Bulbul TTS ──→ one spoken relay sentence to the listener
 ```
 
-- `app/sarvam.py` — every endpoint and param in one place, so `verify.py` proves them all
-- `app/mediator.py` — **the scored core.** Term state machine + divergence detection
-- `app/main.py` — `/turn`, `/state`, `/packet`, `/reset`
-- `static/index.html` — whole UI, no build step
-- `verify.py` — first-hour preflight
+- `app/sarvam.py` — every Sarvam endpoint/param in one place, so `verify.py` proves them all
+- `app/mediator.py` — **the scored core.** Term state machine + divergence detection, scoped per room
+- `app/agent.py` — one tool-calling `sarvam-30b` call per completed turn
+- `app/stt_stream.py` — Sarvam STT WebSocket URL builder + frame classifier
+- `app/session.py` — snapshot persistence (file-based; also reused for the DB path)
+- `app/meet_interface/` — the real-time meet:
+  - `rooms.py` — in-memory room registry (create/join, max 2 participants), Postgres-backed for durability
+  - `db.py` — Neon Postgres: rooms, participants, term-sheet snapshots (degrades to in-memory-only if unreachable)
+  - `languages.py` — supported languages (English + Indian languages) and their TTS speakers
+  - `ws.py` — the live relay: browser PCM16 → Sarvam STT WS → live captions + one agent call per turn → TTS → broadcast
+  - `app.py` — router: `POST /api/meet/rooms`, `GET /api/meet/languages`, `WS /api/meet/ws/{code}`
+- `frontend/` — Next.js 14 app (TypeScript, Tailwind, Zustand), built as a **static export** and served by FastAPI at `/meet`
+- `verify.py` — first-hour Sarvam API preflight
 
-## Demo (3 min)
+## What you need to supply
 
-- **0:00–0:30** Migrant tenant, local landlord, no shared language. Deposit disputes are
-  the single most common rental complaint in India.
-- **0:30–1:00** Today: a broker "translates" and both sides sign a doc neither fully
-  understood. Show the empty sheet.
-- **1:00–2:30** Live. Vatsa in Gujarati, Sreedev in Malayalam. Rent agrees cleanly →
-  green. Then maintenance: **both say yes, sheet goes red.** Agent interjects in both
-  languages with the one disambiguating question. Judge sees `DIVERGED` and both
-  verbatim quotes side by side — verifiable without speaking either language.
-- **2:30–3:00** Emit the lawyer packet. `DO NOT DRAFT THESE CLAUSES` at the top.
+- **`SARVAM_API_KEY`** — root `.env`.
+- **`DATABASE_URL`** — a Postgres connection string (Neon or otherwise), root `.env`. Rooms still
+  work with no DB configured (in-memory only) — a room just won't survive a server restart.
 
 ## Open before demo
 
 - [ ] `verify.py` all green on venue wifi; note real latency
-- [ ] confirm `speaker` names valid for gu-IN and ml-IN (see Bulbul docs list)
-- [ ] record `fixtures/sample_gu.webm` and re-run `verify.py` with STT
-- [ ] 3 scripted negotiations rehearsed end-to-end, zero keystrokes
-- [ ] restart the server mid-demo once — state must survive
+- [ ] confirm `speaker` names valid for every language in `app/meet_interface/languages.py`
+      (only `gu-IN`→`ratan` and `ml-IN`→`shubh` are confirmed against live docs)
+- [ ] two devices, two languages, one call: divergence still turns a term red
+- [ ] restart the server mid-call once — a rejoined room's term sheet survives
