@@ -411,8 +411,9 @@ def _packet_html(s: dict) -> str:
         if s["drafting_safe"] else
         "<div class='stop'><b>DO NOT DRAFT THESE CLAUSES.</b> Not agreed: "
         + ", ".join(blocked or [t["key"] for t in s["terms"] if t["state"] not in ("AGREED", "OPEN")]) +
-        ". Both parties said yes to different things, gave a soft non-answer, or a "
-        "term is still only proposed by one side.</div>"
+        ". Both parties said yes to different things, gave a soft non-answer, a "
+        "term is still only proposed by one side, or it was parked after repeated "
+        "deadlock.</div>"
     )
     return f"""<!doctype html><meta charset=utf-8>
 <title>NyayBandhan &mdash; Lawyer Packet</title><style>
@@ -421,7 +422,8 @@ h1{{margin:0 0 4px}} .sub{{color:#666;margin-bottom:24px}}
 table{{border-collapse:collapse;width:100%}} td,th{{border:1px solid #ddd;padding:10px;vertical-align:top}}
 th{{background:#f5f5f5;text-align:left}} .st{{font-weight:700;white-space:nowrap}}
 tr.AGREED .st{{color:#0a7}} tr.DIVERGED .st{{color:#c00}} tr.HEDGED .st{{color:#c60}}
-tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}}
+tr.PARKED .st{{color:#fff;background:#555;padding:2px 6px;border-radius:3px}}
+tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}} tr.PARKED{{background:#f0f0f0}}
 .q{{display:block;margin:2px 0}} code{{background:#eee;padding:1px 4px}}
 .note{{margin-top:6px;padding:6px;background:#ffe9e9;border-left:3px solid #c00}}
 .stop{{padding:12px;background:#ffe9e9;border-left:4px solid #c00;margin-bottom:20px}}
@@ -435,7 +437,9 @@ tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}}
 <table><tr><th>Term</th><th>State</th><th>Agreed value</th><th>What each party actually said</th></tr>
 {''.join(rows) or '<tr><td colspan=4>Nothing discussed yet.</td></tr>'}</table>
 <p class=sub>Generated for legal review. Clauses marked DIVERGED or HEDGED were
-deliberately not resolved by the system &mdash; they need a human decision first.</p>"""
+deliberately not resolved by the system &mdash; they need a human decision first.
+PARKED terms were attempted and could not be settled after repeated tries; they are
+the most likely source of a future dispute.</p>"""
 
 
 @app.post("/replay/{scenario}")

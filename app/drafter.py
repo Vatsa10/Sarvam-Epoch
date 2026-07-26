@@ -82,6 +82,10 @@ def _blocked(neg: Negotiation) -> list[dict]:
             reason = f"{t.key}: proposed but never accepted by the other party"
         elif t.state is TermState.REJECTED:
             reason = f"{t.key}: rejected"
+        elif t.state is TermState.PARKED:
+            reason = (f"{t.key}: the parties attempted this term ({t.attempts} "
+                      f"attempt(s)) and could not agree, so it was set aside. "
+                      f"Needs a human decision before signing.")
         else:
             continue
         quotes = [
@@ -90,7 +94,8 @@ def _blocked(neg: Negotiation) -> list[dict]:
             f"“{p.verbatim}” → {p.value}"
             for p in t.proposals
         ]
-        out.append({"reason": reason, "quotes": quotes})
+        out.append({"reason": reason, "quotes": quotes,
+                    "parked": t.state is TermState.PARKED})
     return out
 
 
@@ -131,6 +136,7 @@ def _tx_split(transcript: list[dict], settled: list[dict]) -> list[dict]:
                           f"transcript records a different figure. Do not draft this "
                           f"clause until one value is confirmed.",
                 "quotes": quotes,
+                "parked": False,
             })
         else:
             s["provenance"] = "; ".join(filter(None, [s["provenance"]] + quotes))
@@ -179,11 +185,12 @@ async def draft(neg: Negotiation, lawyer_lang: str = "en-IN",
     for b in blocked:
         reason = (await _safe(b["reason"], lawyer_lang)
                   if lawyer_lang != "en-IN" else b["reason"])
-        result.open_questions.append({"reason": reason, "quotes": b["quotes"]})
+        result.open_questions.append({"reason": reason, "quotes": b["quotes"],
+                                      "parked": b.get("parked", False)})
     for n in notes:
         result.open_questions.append({
             "reason": await _safe(n, lawyer_lang) if lawyer_lang != "en-IN" else n,
-            "quotes": []})
+            "quotes": [], "parked": False})
     if lawyer_lang != "en-IN":
         for c in result.clauses:
             c["text"] = await _safe(c["text"], lawyer_lang)
@@ -203,7 +210,8 @@ def render(d: Draft, neg: Negotiation) -> str:
         f"<li><p>{c['text']}</p><p class=prov>{c['provenance']}</p></li>"
         for c in d.clauses) or "<li><em>No term was settled — nothing to draft.</em></li>"
     open_q = "".join(
-        f"<li><p>{q['reason']}</p>"
+        f"<li>{'<span class=parked>PARKED &mdash; deadlocked</span> ' if q.get('parked') else ''}"
+        f"<p>{q['reason']}</p>"
         + "".join(f"<p class=prov>{quote}</p>" for quote in q.get("quotes", []))
         + (f"<p class=todo><b>To resolve:</b> re-ask this one question and record "
            f"a single value both parties state.</p>" if q.get("quotes") else "")
@@ -220,6 +228,8 @@ h1{{font-size:22px;margin:0 0 4px}} .sub{{color:#666;font-size:13px;margin-botto
 ol{{padding-left:22px}} li{{margin-bottom:14px}}
 .prov{{font-size:12px;color:#777;margin-top:2px;font-family:system-ui}}
 .todo{{font-size:13px;color:#a00;margin-top:6px;font-family:system-ui}}
+.parked{{display:inline-block;font-size:11px;font-weight:700;color:#fff;background:#555;
+padding:1px 6px;border-radius:3px;font-family:system-ui}}
 .stop{{padding:12px;background:#ffe9e9;border-left:4px solid #c00;margin:18px 0}}
 .ok{{padding:12px;background:#e9ffe9;border-left:4px solid #0a7;margin:18px 0}}
 h2{{font-size:15px;margin-top:28px}}

@@ -4,7 +4,7 @@ import sys
 
 SUITES = ["test_config.py", "test_translate.py", "test_mediator.py", "test_agent.py",
           "test_session.py", "test_stt_stream.py", "test_replay.py", "test_llm.py",
-          "test_memory.py"]
+          "test_memory.py", "test_drafter.py"]
 
 failed = []
 for s in SUITES:
