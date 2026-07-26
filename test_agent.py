@@ -58,6 +58,35 @@ def test_check_readiness_lists_undiscussed_terms():
     assert "notice_period" in res.summary
 
 
+def test_flag_divergence_tool_branch():
+    neg = Negotiation()
+    apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "15000", "verbatim": "pandar hajaar", "stance": "propose"}}], 0)
+    apply_tool_calls(neg, "sreedev", "ml-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "12000", "verbatim": "pantranda", "stance": "propose"}}], 1)
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "flag_divergence", "arguments": {
+        "term": "rent", "note": "amounts differ"}}], 2)
+    assert neg.terms["rent"].state is TermState.DIVERGED
+    assert neg.terms["rent"].agreed_value is None
+    assert neg.terms["rent"].divergence_note == "amounts differ"
+    assert "rent" in res.flagged
+
+
+def test_flag_divergence_unknown_term_is_ignored():
+    neg = Negotiation()
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "flag_divergence", "arguments": {
+        "term": "not_a_real_term", "note": "whatever"}}], 0)
+    assert res.flagged == []
+
+
+def test_flag_divergence_needs_existing_proposals():
+    neg = Negotiation()
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "flag_divergence", "arguments": {
+        "term": "rent", "note": "premature"}}], 0)
+    assert neg.terms["rent"].state is TermState.OPEN
+    assert "rent" not in res.flagged
+
+
 def test_unknown_tool_is_ignored_not_crashed():
     neg = Negotiation()
     res = apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "nonexistent", "arguments": {}}], 0)

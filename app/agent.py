@@ -90,10 +90,16 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
             key = args.get("term")
             if key in neg.terms:
                 t = neg.terms[key]
-                t.state = TermState.DIVERGED
-                t.agreed_value = None
-                t.divergence_note = args.get("note", "")
-                res.flagged.append(key)
+                # Defensive, not authoritative: only escalate a term that already
+                # carries provenance (proposals from at least one party). A term
+                # with no proposals has nothing to diverge between, and setting
+                # DIVERGED here would render with an empty quote list - the
+                # demo's key evidence, gone.
+                if t.proposals:
+                    t.state = TermState.DIVERGED
+                    t.agreed_value = None
+                    t.divergence_note = args.get("note", "")
+                    res.flagged.append(key)
         elif name == "request_clarification":
             res.clarification = args.get("question")
         elif name == "check_readiness":
