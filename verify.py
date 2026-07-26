@@ -13,7 +13,8 @@ import pathlib
 import sys
 import time
 
-from app import sarvam
+from app import sarvam, llm
+from app.agent import TOOLS
 
 ROOT = pathlib.Path(__file__).resolve().parent
 OK, BAD = "  [OK]", "  [FAIL]"
@@ -68,7 +69,32 @@ async def main() -> int:
         else:
             print(f"  [SKIP] stt - record a clip to {clip} first (10s of Gujarati)")
 
-    print(f"\n{'ALL GREEN - start building.' if not fails else f'{fails} FAILED - fix before coding.'}\n")
+    print()
+    if not llm.OPENAI_KEY:
+        print(f"  [SKIP] openai - OPENAI_API_KEY not set")
+    else:
+        async def openai_check():
+            message = await llm.complete_with_tools(
+                system="You are a rental negotiation mediator. Parse the speaker's proposal.",
+                user="The rent should be 15,000 rupees per month, fixed.",
+                tools=TOOLS,
+            )
+            tool_names = []
+            for tc in message.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                tool_names.append(fn.get("name"))
+            if tool_names:
+                return f"tools: {', '.join(tool_names)}"
+            return "no tool calls (content: " + (message.get("content", "")[:50] or "empty") + ")"
+
+        out = await timed("openai (gpt-4o-mini, tool call)", openai_check())
+        if out is None:
+            fails += 1
+        else:
+            print(f"       -> {out}")
+
+    print(f"\nProvider split: reasoning={llm.PROVIDER}/{llm.MODEL} | speech=Saaras + Bulbul (Sarvam)\n")
+    print(f"{'ALL GREEN - start building.' if not fails else f'{fails} FAILED - fix before coding.'}\n")
     await sarvam.aclose()
     return 1 if fails else 0
 

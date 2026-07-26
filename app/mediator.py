@@ -122,14 +122,18 @@ class Negotiation:
             elif prop.stance == "reject":
                 term.state = TermState.REJECTED
                 term.agreed_value = None
+                term.divergence_note = None
 
             elif prop.stance == "accept":
-                if prior is None:
-                    # accepting something nobody proposed - treat as a proposal
+                if prior is None or prior.stance in ("hedge", "reject"):
+                    # accepting something nobody proposed (or only hedged/rejected)
+                    # - treat as a proposal, not an agreement.
                     term.state = TermState.PROPOSED
+                    term.agreed_value = None
                 elif _same(prior.value, prop.value):
                     term.state = TermState.AGREED
                     term.agreed_value = prior.value
+                    term.divergence_note = None
                 else:
                     # BOTH SAID YES. TO DIFFERENT THINGS. This is the whole product.
                     term.state = TermState.DIVERGED
@@ -146,8 +150,25 @@ class Negotiation:
                 else:
                     term.state = TermState.PROPOSED
                 term.agreed_value = None
+                term.divergence_note = None
 
         return needs_interjection
+
+    def transcript_history(self, limit: int = 6) -> str:
+        """Recent turns, each attributed to a named speaker.
+
+        Attribution is the point: the agent must never credit one party with the
+        other's words, because that becomes a wrong clause in a signed document.
+        """
+        from . import sarvam
+        recent = self.turns[-limit:] if limit else self.turns
+        lines = []
+        for t in recent:
+            cfg = sarvam.PARTIES.get(t.party, {})
+            who = cfg.get("name", t.party)
+            lang = cfg.get("label", t.lang)
+            lines.append(f"[turn {t.idx}] {who} ({lang}): {t.transcript}")
+        return "\n".join(lines) or "(no prior turns - this is the first)"
 
     def _other_party(self, party: str) -> str:
         return next(p for p in sarvam.PARTIES if p != party)
@@ -190,8 +211,14 @@ def _same(a: str, b: str) -> bool:
     return bool(na) and na == nb
 
 
+_NOISE = ("rupees", "rupee", "inr", "rs", "permonth", "monthly", "months", "month", "days", "day")
+
+
 def _norm(s: str) -> str:
-    return "".join(ch for ch in s.lower() if ch.isalnum())
+    t = "".join(ch for ch in s.lower() if ch.isalnum())
+    for w in _NOISE:
+        t = t.replace(w, "")
+    return t
 
 
 # ---------- extraction ----------

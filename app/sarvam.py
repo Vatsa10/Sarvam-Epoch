@@ -21,20 +21,22 @@ API_KEY = os.getenv("SARVAM_API_KEY", "")
 BASE = os.getenv("SARVAM_BASE", "https://api.sarvam.ai")
 
 STT_URL = f"{BASE}/speech-to-text"
+STT_WS_URL = "wss://api.sarvam.ai/speech-to-text/ws"
 TTS_URL = f"{BASE}/text-to-speech"
+TRANSLATE_URL = f"{BASE}/translate"
 CHAT_URL = f"{BASE}/v1/chat/completions"
 
 STT_MODEL = "saaras:v3"
 TTS_MODEL = "bulbul:v3"
-CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-m")
+CHAT_MODEL = os.getenv("SARVAM_CHAT_MODEL", "sarvam-30b")
 
 HEADERS = {"api-subscription-key": API_KEY}
 
-# ponytail: two parties is the product, not a config surface. Add a third here if
-# the demo ever needs one - the mediator already keys everything by party id.
+# Speaker choice is language-dependent per Sarvam docs. These are the documented
+# picks; anushka/abhilash are v2-only and 400 on bulbul:v3.
 PARTIES = {
-    "vatsa":   {"name": "Vatsa",   "lang": "gu-IN", "label": "Gujarati", "speaker": "anushka"},
-    "sreedev": {"name": "Sreedev", "lang": "ml-IN", "label": "Malayalam", "speaker": "abhilash"},
+    "vatsa":   {"name": "Vatsa",   "lang": "gu-IN", "label": "Gujarati",  "speaker": "ratan"},
+    "sreedev": {"name": "Sreedev", "lang": "ml-IN", "label": "Malayalam", "speaker": "shubh"},
 }
 
 _client = httpx.AsyncClient(timeout=45.0)
@@ -93,6 +95,48 @@ async def chat(system: str, user: str, temperature: float = 0.1) -> str:
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
+
+
+async def chat_tools(system: str, user: str, tools: list[dict],
+                     temperature: float = 0.1) -> dict:
+    """Tool-calling chat. Returns the raw assistant message dict so the caller can
+    read both `tool_calls` and `content`."""
+    r = await _client.post(
+        CHAT_URL,
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={
+            "model": CHAT_MODEL,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": temperature,
+        },
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]
+
+
+async def translate(text: str, target_language_code: str,
+                    source_language_code: str = "auto") -> str:
+    """Live-notes path. Deliberately uses /translate, not the chat model: it is a
+    separate 60/min quota bucket, so partials never eat the 40/min sarvam-30b budget.
+
+    mayura:v1 caps at 1000 chars; a single VAD segment is far below that.
+    """
+    r = await _client.post(
+        TRANSLATE_URL,
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={
+            "input": text[:1000],
+            "source_language_code": source_language_code,
+            "target_language_code": target_language_code,
+            "model": "mayura:v1",
+            "mode": "code-mixed",
+        },
+    )
+    r.raise_for_status()
+    return r.json().get("translated_text", "")
 
 
 async def aclose() -> None:

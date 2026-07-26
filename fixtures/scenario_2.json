@@ -1,0 +1,8 @@
+{
+  "name": "polite non-answer on deposit",
+  "turns": [
+    {"party": "vatsa",   "transcript": "Deposit pachaas hajaar joiye chhe."},
+    {"party": "sreedev", "transcript": "Aa... nammal nokkaam, parayaam."}
+  ],
+  "expected": {"deposit": "HEDGED"}
+}

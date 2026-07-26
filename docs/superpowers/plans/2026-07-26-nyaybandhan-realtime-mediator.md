@@ -1234,7 +1234,7 @@ git commit -m "feat: /replay endpoint and three evidence scenarios"
 
 ---
 
-### Task 9: Hidden mute and full-suite green
+### Task 9 (SUPERSEDED - UI work moved to Sreedev; runner survives as Task 14): Hidden mute and full-suite green
 
 **Files:**
 - Modify: `static/index.html`
@@ -1327,3 +1327,378 @@ git commit -m "feat: hidden mute shortcut and full test runner"
 **Type consistency:** `TurnResult(updates, flagged, clarification, summary)` produced in Task 3 is consumed unchanged in Tasks 7 and 8. `session.save/load` signatures in Task 4 match their call sites. `classify` returns `(kind, text)` in Task 6 and is destructured that way in Task 7. `startCapture` from Task 5 is called in Task 7's `goLive` and re-gated in Task 9.
 
 **Ordering note:** Tasks 1–4 are pure and testable offline; 5–7 need a browser and a live key. If `verify.py` is not green, do 1–4 anyway — they are the scored core and they do not touch the network.
+
+---
+
+## Addendum — 12:55, direction change
+
+Sreedev owns UI and backend wiring from here. The remaining work is the **AI layer only**.
+Task 9's hidden-mute (UI) is dropped; its test runner survives into Task 14.
+
+**New global constraints:**
+- **Agent reasoning and tool calling run on `gpt-4o-mini`** via the OpenAI SDK. Sarvam keeps every
+  speech surface — Saaras STT, Bulbul TTS, `/translate`. The declared scored parameter is Voice
+  Experience and Saaras/Bulbul carry it; the reasoner is a supporting model, which the build rules
+  permit ("Other models and APIs may support it").
+- Side benefit: moving agent calls off `sarvam-30b` frees its entire 40/min budget.
+- Both keys live in a gitignored `.env`: `SARVAM_API_KEY`, `OPENAI_API_KEY`. Never commit it, never
+  print a key value.
+- **The agent must never confuse who said what.** Every turn carries explicit speaker identity and
+  attributed conversation history.
+
+---
+
+### Task 12: Pluggable LLM provider — gpt-4o-mini for reasoning
+
+**Files:**
+- Create: `app/llm.py`
+- Create: `test_llm.py`
+- Modify: `app/agent.py` (swap `sarvam.chat_tools` to `llm.complete_with_tools`)
+- Modify: `requirements.txt` (add `openai==1.59.6`)
+
+**Interfaces:**
+- Consumes: env `AGENT_PROVIDER` (default `openai`), `OPENAI_API_KEY`, `AGENT_MODEL` (default `gpt-4o-mini`)
+- Produces: `async def complete_with_tools(system, user, tools, temperature=0.1) -> dict` returning an
+  OpenAI-shaped assistant **message dict** with `content` and optional `tool_calls` — the exact shape
+  `agent._parse_tool_calls` already consumes.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# test_llm.py
+import asyncio
+
+from app import llm
+
+
+def test_provider_defaults_to_openai_gpt4o_mini():
+    assert llm.PROVIDER == "openai"
+    assert llm.MODEL == "gpt-4o-mini"
+
+
+def test_complete_with_tools_returns_message_dict():
+    async def fake(system, user, tools, temperature):
+        return {"content": "ok", "tool_calls": [
+            {"function": {"name": "update_term", "arguments": '{"term":"rent"}'}}]}
+
+    original = llm._route
+    llm._route = fake
+    try:
+        out = asyncio.run(llm.complete_with_tools("sys", "usr", [], 0.1))
+    finally:
+        llm._route = original
+    assert out["content"] == "ok"
+    assert out["tool_calls"][0]["function"]["name"] == "update_term"
+
+
+def test_sarvam_provider_is_still_selectable():
+    assert "sarvam" in llm.PROVIDERS
+
+
+if __name__ == "__main__":
+    for n, f in sorted(globals().items()):
+        if n.startswith("test_"):
+            f(); print(f"  [OK] {n}")
+    print("\nllm sound\n")
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `python test_llm.py`
+Expected: FAIL — `ModuleNotFoundError: No module named 'app.llm'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# app/llm.py
+"""Reasoning provider for the mediator agent.
+
+gpt-4o-mini does tool calling; Sarvam keeps every speech surface (Saaras, Bulbul,
+/translate), which is what the declared Voice Experience parameter is scored on.
+Moving reasoning off sarvam-30b also frees its whole 40 req/min budget for speech.
+
+`sarvam` stays selectable via AGENT_PROVIDER so the build still runs if the OpenAI
+key fails on the floor - one env var, no code change.
+"""
+from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+
+from . import sarvam
+
+load_dotenv()
+
+PROVIDERS = ("openai", "sarvam")
+PROVIDER = os.getenv("AGENT_PROVIDER", "openai").lower()
+MODEL = os.getenv("AGENT_MODEL", "gpt-4o-mini")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+
+_openai_client = None
+
+
+def _client():
+    global _openai_client
+    if _openai_client is None:
+        from openai import AsyncOpenAI
+        _openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
+    return _openai_client
+
+
+async def _openai_call(system: str, user: str, tools: list[dict], temperature: float) -> dict:
+    kwargs = {
+        "model": MODEL,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+        "temperature": temperature,
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    r = await _client().chat.completions.create(**kwargs)
+    return r.choices[0].message.model_dump()
+
+
+async def _sarvam_call(system: str, user: str, tools: list[dict], temperature: float) -> dict:
+    return await sarvam.chat_tools(system, user, tools, temperature)
+
+
+async def _route(system: str, user: str, tools: list[dict], temperature: float) -> dict:
+    if PROVIDER == "sarvam":
+        return await _sarvam_call(system, user, tools, temperature)
+    return await _openai_call(system, user, tools, temperature)
+
+
+async def complete_with_tools(system: str, user: str, tools: list[dict],
+                              temperature: float = 0.1) -> dict:
+    """Returns an OpenAI-shaped assistant message dict: {content, tool_calls?}."""
+    return await _route(system, user, tools, temperature)
+```
+
+In `app/agent.py`, add `from . import llm` and replace the `sarvam.chat_tools(...)` call inside
+`run_turn` with `await llm.complete_with_tools(system=SYSTEM, user=..., tools=TOOLS)`.
+Leave `sarvam.chat_tools` in place — it is the fallback path.
+
+- [ ] **Step 4: Run tests**
+
+Run: `python test_llm.py && python test_agent.py`
+Expected: both PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/llm.py app/agent.py test_llm.py requirements.txt
+git commit -m "feat: run agent reasoning on gpt-4o-mini, Sarvam keeps speech"
+```
+
+---
+
+### Task 13: Turn-aware stateful context
+
+**Files:**
+- Modify: `app/mediator.py` (add `Negotiation.transcript_history`)
+- Modify: `app/agent.py` (add `build_context`, extend `SYSTEM`)
+- Modify: `test_agent.py`, `test_mediator.py`
+
+**Interfaces:**
+- Produces: `Negotiation.transcript_history(limit: int = 6) -> str`
+- Produces: `agent.build_context(neg, party, transcript) -> str`
+
+**Why:** the agent currently sees only the current utterance and a bare term-sheet summary. It has
+no idea who spoke previously, so it can misattribute a stance — recording one party's acceptance
+against their own proposal, or crediting A with B's words. In a two-party negotiation where the
+entire product is "who agreed to what," a misattribution becomes a wrong clause in a signed document.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# append to test_mediator.py
+def test_transcript_history_attributes_each_speaker():
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    n.turns.append(Turn(idx=0, party="vatsa", lang="gu-IN",
+                        transcript="bhaade pandar hajaar", relay_text="", interjection=None))
+    n.turns.append(Turn(idx=1, party="sreedev", lang="ml-IN",
+                        transcript="pathinanju sari", relay_text="", interjection=None))
+    h = n.transcript_history()
+    assert "Vatsa" in h and "Sreedev" in h
+    assert "pandar hajaar" in h and "pathinanju" in h
+    assert h.index("Vatsa") < h.index("Sreedev"), "history must preserve turn order"
+
+
+def test_transcript_history_respects_limit():
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    for i in range(10):
+        n.turns.append(Turn(idx=i, party="vatsa", lang="gu-IN",
+                            transcript=f"utterance{i}", relay_text="", interjection=None))
+    h = n.transcript_history(limit=3)
+    assert "utterance9" in h and "utterance6" not in h
+
+
+def test_transcript_history_empty_is_safe():
+    from app.mediator import Negotiation
+    assert isinstance(Negotiation().transcript_history(), str)
+
+
+def test_cannot_agree_with_your_own_proposal():
+    """A speaker accepting their OWN prior proposal is not agreement - there is no
+    counterparty. Guards the single worst misattribution the product can make."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "pandar", "stance": "propose"}], 0)
+    n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "15000",
+            "verbatim": "haan theek", "stance": "accept"}], 1)
+    assert n.terms["rent"].state is not TermState.AGREED
+    assert n.terms["rent"].agreed_value is None
+```
+
+```python
+# append to test_agent.py
+def test_context_names_the_current_speaker_and_the_listener():
+    from app.agent import build_context
+    from app.mediator import Negotiation
+    ctx = build_context(Negotiation(), "vatsa", "bhaade pandar hajaar")
+    assert "Vatsa" in ctx and "Sreedev" in ctx
+    assert "Gujarati" in ctx and "Malayalam" in ctx
+    assert "bhaade pandar hajaar" in ctx
+
+
+def test_context_includes_prior_turns_with_attribution():
+    from app.agent import build_context
+    from app.mediator import Negotiation, Turn
+    n = Negotiation()
+    n.turns.append(Turn(idx=0, party="sreedev", lang="ml-IN",
+                        transcript="pathinanju sari", relay_text="", interjection=None))
+    ctx = build_context(n, "vatsa", "haan")
+    assert "pathinanju sari" in ctx
+    assert "Sreedev" in ctx
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `python test_mediator.py` then `python test_agent.py`
+Expected: FAIL — `AttributeError: 'Negotiation' object has no attribute 'transcript_history'` and
+`ImportError: cannot import name 'build_context'`
+
+- [ ] **Step 3: Implement**
+
+Add to `Negotiation` in `app/mediator.py`:
+
+```python
+    def transcript_history(self, limit: int = 6) -> str:
+        """Recent turns, each attributed to a named speaker.
+
+        Attribution is the point: the agent must never credit one party with the
+        other's words, because that becomes a wrong clause in a signed document.
+        """
+        from . import sarvam
+        recent = self.turns[-limit:] if limit else self.turns
+        lines = []
+        for t in recent:
+            cfg = sarvam.PARTIES.get(t.party, {})
+            who = cfg.get("name", t.party)
+            lang = cfg.get("label", t.lang)
+            lines.append(f"[turn {t.idx}] {who} ({lang}): {t.transcript}")
+        return "\n".join(lines) or "(no prior turns - this is the first)"
+```
+
+Add above `run_turn` in `app/agent.py`:
+
+```python
+def build_context(neg: Negotiation, party: str, transcript: str) -> str:
+    """Everything the agent needs to attribute this utterance correctly."""
+    from . import sarvam
+    me = sarvam.PARTIES[party]
+    other_id = next(p for p in sarvam.PARTIES if p != party)
+    other = sarvam.PARTIES[other_id]
+
+    sheet = "\n".join(
+        f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
+        for t in neg.terms.values() if t.state is not TermState.OPEN
+    ) or "(nothing discussed yet)"
+
+    return (
+        f"PARTIES\n"
+        f"- {me['name']} speaks {me['label']}\n"
+        f"- {other['name']} speaks {other['label']}\n\n"
+        f"SPEAKING NOW: {me['name']} ({me['label']}). "
+        f"Everything in THIS UTTERANCE is {me['name']}'s words, nobody else's.\n\n"
+        f"CONVERSATION SO FAR\n{neg.transcript_history()}\n\n"
+        f"TERM SHEET\n{sheet}\n\n"
+        f"THIS UTTERANCE ({me['name']}):\n{transcript}"
+    )
+```
+
+`run_turn` then passes `build_context(neg, party, transcript)` as its `user` argument instead of
+assembling the string inline.
+
+Append to `SYSTEM` in `app/agent.py`:
+
+```
+ATTRIBUTION IS NOT OPTIONAL. The utterance you are given belongs to the speaker named in
+SPEAKING NOW. Never record a stance on behalf of the other party. If the speaker refers to
+what the other party said earlier, that is context for interpreting THEIR words - it is not
+a new statement by the other party. A speaker cannot accept their own proposal; if they
+restate their own position, that is `propose`, not `accept`.
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `python test_mediator.py && python test_agent.py`
+Expected: both PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/mediator.py app/agent.py test_mediator.py test_agent.py
+git commit -m "feat: attributed turn history so the agent never mixes up speakers"
+```
+
+---
+
+### Task 14: Preflight and suite runner for both providers
+
+**Files:**
+- Create: `run_tests.py`
+- Modify: `verify.py` (add an OpenAI check)
+
+- [ ] **Step 1: Write `run_tests.py`**
+
+```python
+# run_tests.py
+"""Every suite, one command. Exits non-zero if anything fails."""
+import subprocess
+import sys
+
+SUITES = ["test_config.py", "test_translate.py", "test_mediator.py", "test_agent.py",
+          "test_session.py", "test_stt_stream.py", "test_replay.py", "test_llm.py"]
+
+failed = []
+for s in SUITES:
+    print(f"\n=== {s} ===")
+    if subprocess.run([sys.executable, s]).returncode != 0:
+        failed.append(s)
+
+print("\n" + ("ALL GREEN" if not failed else f"FAILED: {', '.join(failed)}"))
+sys.exit(1 if failed else 0)
+```
+
+- [ ] **Step 2: Add the OpenAI preflight to `verify.py`**
+
+Add a check that `OPENAI_API_KEY` is set and that a `gpt-4o-mini` tool call round-trips, printing
+latency. **Never print a key value.** Keep every existing Sarvam check unchanged.
+
+- [ ] **Step 3: Run**
+
+Run: `python run_tests.py`
+Expected: `ALL GREEN`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add run_tests.py verify.py
+git commit -m "feat: suite runner and dual-provider preflight"
+```

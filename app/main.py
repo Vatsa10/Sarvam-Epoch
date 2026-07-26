@@ -7,16 +7,19 @@ Flow per turn:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import pathlib
+import time
 from typing import Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+import websockets
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import sarvam
+from . import agent, sarvam, session, stt_stream
 from .mediator import Negotiation, Turn, TermState
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -33,33 +36,189 @@ NEG = Negotiation()
 
 
 def _persist() -> None:
-    (SESSIONS / f"{NEG.session_id}.json").write_text(
-        json.dumps(NEG.sheet(), ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
 
 
 def _restore() -> None:
     """Rebuild from the snapshot so `uvicorn --reload` (and a live restart) keep state."""
-    f = SESSIONS / f"{NEG.session_id}.json"
-    if not f.exists():
-        return
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
-    from .mediator import Proposal
-    for t in data.get("terms", []):
-        term = NEG.terms.get(t["key"])
-        if not term:
-            continue
-        term.state = TermState(t["state"])
-        term.agreed_value = t.get("agreed_value")
-        term.divergence_note = t.get("divergence_note")
-        term.proposals = [Proposal(**p) for p in t.get("proposals", [])]
-    NEG.turns = [Turn(**x) for x in data.get("turns", [])]
+    global NEG
+    NEG = session.load(SESSIONS / f"{NEG.session_id}.json", NEG.session_id)
 
 
 _restore()
+
+PANELS: dict[str, set[WebSocket]] = {"vatsa": set(), "sreedev": set()}
+
+# The browser sends raw pcm_s16le with no container (no RIFF header) - it is NOT a
+# wav file. This literal MUST be confirmed against a live Sarvam socket during
+# preflight, and is the first thing to change if STT comes back with empty
+# transcripts.
+AUDIO_FRAME_ENCODING = "audio/x-raw"
+
+# Guards the read-idx -> append -> save critical section of _finish_turn. Both
+# parties have independent sockets and can enter _finish_turn concurrently; without
+# this, both can read the same len(NEG.turns) and append two turns sharing one idx,
+# corrupting the ordering the lawyer packet depends on.
+TURN_LOCK = asyncio.Lock()
+
+
+async def _broadcast(party: str, payload: dict) -> None:
+    """Send to one party's panel. Dead sockets are dropped, never raised - a closed
+    tab must not kill a live turn."""
+    dead = []
+    # Snapshot before iterating: a second tab connecting for this party mid-broadcast
+    # mutates PANELS[party] across our await points, which raises "Set changed size
+    # during iteration" if we iterate the live set directly.
+    for ws in list(PANELS.get(party, set())):
+        try:
+            await ws.send_json(payload)
+        except Exception:  # noqa: BLE001
+            dead.append(ws)
+    for ws in dead:
+        PANELS[party].discard(ws)
+
+
+@app.websocket("/ws/{party}")
+async def ws_party(client: WebSocket, party: str) -> None:
+    if party not in sarvam.PARTIES:
+        await client.close(code=4004)
+        return
+    await client.accept()
+    PANELS[party].add(client)
+
+    me = sarvam.PARTIES[party]
+    other = next(p for p in sarvam.PARTIES if p != party)
+    other_cfg = sarvam.PARTIES[other]
+    url = stt_stream.build_ws_url(me["lang"])
+
+    try:
+        async with websockets.connect(url, additional_headers=stt_stream.WS_HEADERS) as up:
+            async def pump_up() -> None:
+                """Browser PCM -> Sarvam."""
+                while True:
+                    chunk = await client.receive_bytes()
+                    await up.send(json.dumps({
+                        "audio": {"data": _b64(chunk), "encoding": AUDIO_FRAME_ENCODING}
+                    }))
+
+            async def pump_down() -> None:
+                """Sarvam -> notes, and on turn end, the agent."""
+                buffer: list[str] = []
+                last_partial = 0.0
+                try:
+                    async for raw in up:
+                        kind, text = stt_stream.classify(json.loads(raw))
+
+                        if kind == "partial":
+                            # Every STT partial otherwise fires a /translate call and
+                            # exhausts the 60/min rate bucket in ~40s, blocking this
+                            # read loop. Finals stay unthrottled.
+                            now = time.monotonic()
+                            if now - last_partial < 1.5:
+                                continue
+                            last_partial = now
+                            note = await _safe_translate(text, other_cfg["lang"], me["lang"])
+                            await _broadcast(other, {"type": "note", "final": False,
+                                                     "from": me["name"], "text": note})
+
+                        elif kind == "final":
+                            buffer.append(text)
+                            note = await _safe_translate(text, other_cfg["lang"], me["lang"])
+                            await _broadcast(other, {"type": "note", "final": True,
+                                                     "from": me["name"], "text": note})
+
+                        elif kind == "turn_end" and buffer:
+                            await _finish_turn(party, " ".join(buffer))
+                            buffer = []
+
+                        elif kind == "error":
+                            await _broadcast(party, {"type": "error", "text": text})
+                finally:
+                    # The loop can exit via a disconnect/exception with finals already
+                    # buffered and no turn_end yet. That transcript must not vanish:
+                    # best-effort flush it as a completed turn. Guarded on its own so a
+                    # failing flush during teardown never masks the original error.
+                    if buffer:
+                        try:
+                            await _finish_turn(party, " ".join(buffer))
+                        except Exception:  # noqa: BLE001
+                            pass
+
+            up_task = asyncio.ensure_future(pump_up())
+            down_task = asyncio.ensure_future(pump_down())
+            try:
+                done, pending = await asyncio.wait(
+                    {up_task, down_task}, return_when=asyncio.FIRST_EXCEPTION
+                )
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                for t in done:
+                    exc = t.exception()
+                    if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                        raise exc
+            except WebSocketDisconnect:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # noqa: BLE001
+        await _broadcast(party, {"type": "error", "text": f"{type(e).__name__}: {str(e)[:80]}"})
+    finally:
+        PANELS[party].discard(client)
+
+
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode()
+
+
+async def _safe_translate(text: str, target: str, source: str) -> str:
+    """Never fail silently: a 429 or timeout renders a visible placeholder so the
+    operator can see a phrase was dropped rather than believing it landed."""
+    try:
+        return await sarvam.translate(text, target, source)
+    except Exception:  # noqa: BLE001
+        return "…"
+
+
+async def _finish_turn(party: str, transcript: str) -> None:
+    """ONE sarvam-30b call. Never on a partial."""
+    me = sarvam.PARTIES[party]
+    other = next(p for p in sarvam.PARTIES if p != party)
+    other_cfg = sarvam.PARTIES[other]
+
+    # Both parties have independent sockets and can call _finish_turn concurrently.
+    # Hold the lock only across idx assignment -> append -> save: that is the only
+    # section whose ordering the lawyer packet depends on. TTS happens outside it so
+    # a slow Bulbul call on one turn can't stall the other party's turn.
+    async with TURN_LOCK:
+        idx = len(NEG.turns)
+        try:
+            res = await agent.run_turn(NEG, party, me["lang"], transcript, idx)
+        except Exception as e:  # noqa: BLE001
+            for p in sarvam.PARTIES:
+                await _broadcast(p, {"type": "error", "text": f"agent failed: {e}"})
+            return
+
+        spoken = res.clarification or res.summary
+        if spoken:
+            spoken = await _safe_translate(spoken, other_cfg["lang"], "en-IN") or spoken
+        NEG.turns.append(Turn(idx=idx, party=party, lang=me["lang"], transcript=transcript,
+                              relay_text=spoken, interjection=res.clarification))
+        session.save(NEG, SESSIONS / f"{NEG.session_id}.json")
+
+    audio = ""
+    if spoken:
+        try:
+            audio = await sarvam.tts(spoken, other_cfg["lang"], other_cfg["speaker"])
+        except Exception:  # noqa: BLE001
+            audio = ""
+
+    sheet = NEG.sheet()
+    await _broadcast(other, {"type": "turn", "from": me["name"], "spoken": spoken,
+                             "audio_b64": audio, "flagged": res.flagged, "sheet": sheet})
+    await _broadcast(party, {"type": "state", "flagged": res.flagged, "sheet": sheet})
 
 
 def _sheet_summary() -> str:
@@ -189,10 +348,11 @@ async def packet() -> HTMLResponse:
     blocked = s["blocked"]
     banner = (
         "<div class='ok'>All discussed terms AGREED &mdash; safe to draft.</div>"
-        if not blocked else
+        if s["drafting_safe"] else
         "<div class='stop'><b>DO NOT DRAFT THESE CLAUSES.</b> Not agreed: "
-        + ", ".join(blocked) +
-        ". Both parties said yes to different things, or gave a soft non-answer.</div>"
+        + ", ".join(blocked or [t["key"] for t in s["terms"] if t["state"] not in ("AGREED", "OPEN")]) +
+        ". Both parties said yes to different things, gave a soft non-answer, or a "
+        "term is still only proposed by one side.</div>"
     )
     return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
 <title>NyayBandhan &mdash; Lawyer Packet</title><style>
@@ -216,6 +376,40 @@ tr.DIVERGED{{background:#fff5f5}} tr.HEDGED{{background:#fffaf0}}
 {''.join(rows) or '<tr><td colspan=4>Nothing discussed yet.</td></tr>'}</table>
 <p class=sub>Generated for legal review. Clauses marked DIVERGED or HEDGED were
 deliberately not resolved by the system &mdash; they need a human decision first.</p>""")
+
+
+@app.post("/replay/{scenario}")
+async def replay(scenario: str) -> JSONResponse:
+    """Run a scripted negotiation end-to-end with no microphone.
+
+    This is the JTBD evidence path: three of these, zero keystrokes, diffed against
+    the scenario's own expected states.
+    """
+    f = ROOT / "fixtures" / f"{scenario}.json"
+    if not f.exists():
+        return JSONResponse({"error": f"no scenario {scenario}"}, status_code=404)
+
+    spec = json.loads(f.read_text(encoding="utf-8"))
+    neg = Negotiation(f"replay_{scenario}")
+
+    for i, t in enumerate(spec["turns"]):
+        res = await agent.run_turn(neg, t["party"], sarvam.PARTIES[t["party"]]["lang"],
+                                   t["transcript"], i)
+        spoken = res.clarification or res.summary
+        neg.turns.append(Turn(idx=i, party=t["party"],
+                              lang=sarvam.PARTIES[t["party"]]["lang"],
+                              transcript=t["transcript"],
+                              relay_text=spoken, interjection=res.clarification))
+
+    session.save(neg, SESSIONS / f"{neg.session_id}.json")
+    sheet = neg.sheet()
+    actual = {t["key"]: t["state"] for t in sheet["terms"]}
+    mismatches = [
+        {"term": k, "expected": v, "actual": actual.get(k)}
+        for k, v in spec["expected"].items() if actual.get(k) != v
+    ]
+    return JSONResponse({"scenario": spec["name"], "expected_ok": not mismatches,
+                         "mismatches": mismatches, "sheet": sheet})
 
 
 @app.post("/reset")
