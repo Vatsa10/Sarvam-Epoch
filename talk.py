@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import io
 import sys
 import wave
@@ -49,6 +50,12 @@ CHUNK = 1600          # 100ms
 # leaking through the speakers will interrupt itself; headphones make this moot.
 BARGE_LEVEL = 0.12    # peak amplitude, 0-1
 BARGE_BLOCKS = 3      # consecutive 100ms blocks above the level = real speech
+
+# Per-message encoding on the streaming socket. The SDK's own default is
+# "audio/wav" even though the connect URL declares input_audio_codec=pcm_s16le,
+# so the codec appears to come from the URL and this field is metadata. Override
+# with STREAM_ENCODING=... if empty transcripts suggest otherwise.
+STREAM_ENCODING = os.getenv("STREAM_ENCODING", "audio/wav")
 
 LANGS = {
     "1": ("gu-IN", "Gujarati"),
@@ -359,8 +366,15 @@ async def stream(src_code: str, src_name: str) -> None:
     ) as sock:
 
         async def send() -> None:
+            # The SDK wants BASE64 TEXT, not raw bytes - AudioData.data is typed str,
+            # and passing bytes fails pydantic validation before anything hits the wire.
             while True:
-                await sock.transcribe(audio=await q.get())
+                chunk = await q.get()
+                await sock.transcribe(
+                    audio=base64.b64encode(chunk).decode(),
+                    encoding=STREAM_ENCODING,
+                    sample_rate=RATE,
+                )
 
         async def recv() -> None:
             async for msg in sock:

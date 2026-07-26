@@ -49,11 +49,16 @@ _restore()
 
 PANELS: dict[str, set[WebSocket]] = {"vatsa": set(), "sreedev": set()}
 
-# The browser sends raw pcm_s16le with no container (no RIFF header) - it is NOT a
-# wav file. This literal MUST be confirmed against a live Sarvam socket during
-# preflight, and is the first thing to change if STT comes back with empty
-# transcripts.
-AUDIO_FRAME_ENCODING = "audio/x-raw"
+# CONFIRMED against a live Sarvam socket, not guessed: "audio/wav" is the ONLY
+# accepted value. The SDK types this field as Literal['audio/wav'] and rejects
+# anything else, and a run with raw pcm_s16le frames labelled "audio/wav" returned
+# correct Gujarati transcripts plus START_SPEECH/END_SPEECH VAD signals.
+#
+# It reads like a contradiction - we send headerless PCM, not a RIFF file - but the
+# actual codec is declared once in the connect URL (input_audio_codec=pcm_s16le);
+# this per-message field is metadata the server does not use to parse. An earlier
+# "audio/x-raw" here would have produced empty transcripts on stage.
+AUDIO_FRAME_ENCODING = "audio/wav"
 
 # Guards the read-idx -> append -> save critical section of _finish_turn. Both
 # parties have independent sockets and can enter _finish_turn concurrently; without
