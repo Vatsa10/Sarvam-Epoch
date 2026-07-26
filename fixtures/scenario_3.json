@@ -1,0 +1,8 @@
+{
+  "name": "clean agreement, no conflict",
+  "turns": [
+    {"party": "vatsa",   "transcript": "Bhaade bar hajaar, agiyar mahina mate."},
+    {"party": "sreedev", "transcript": "Pannirayiram, pathinonnu masam, sammatham."}
+  ],
+  "expected": {"rent": "AGREED", "duration": "AGREED"}
+}

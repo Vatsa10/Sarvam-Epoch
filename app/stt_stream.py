@@ -39,7 +39,15 @@ def classify(msg: dict) -> tuple[str, str]:
 
     if kind == "events":
         signal = ((msg.get("data") or {}).get("signal_type") or "").upper()
-        if "END" in signal:
+        allowlist = ("END_OF_TURN", "SPEECH_END", "TURN_END", "END_SPEECH")
+        # Known signal names first (exact or substring match against the
+        # allowlist). Only if none of those match do we fall back to the old
+        # bare "END" in signal check - and even then, exclude signals that
+        # plainly aren't about turn-ending, like *_ERROR, to stop the fallback
+        # from misfiring on things such as SEND_ERROR.
+        if any(a == signal or a in signal for a in allowlist):
+            return ("turn_end", "")
+        if "END" in signal and "ERROR" not in signal:
             return ("turn_end", "")
         return ("ignore", "")
 

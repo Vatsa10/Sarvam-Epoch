@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 from . import sarvam
+from . import llm
 from .mediator import Negotiation, TERMS, TermState
 
 TOOLS = [
@@ -60,7 +61,53 @@ detecting that is your entire job. Do not smooth it over.
 A hedge ("we'll see", "dekhte hain", "nokkaam", "joiye chhe") is NOT an accept. Never
 upgrade a hedge.
 
-Then write a one-sentence plain-English summary of what the speaker said."""
+Then write a one-sentence plain-English summary of what the speaker said.
+
+ATTRIBUTION IS NOT OPTIONAL. The utterance you are given belongs to the speaker named in
+SPEAKING NOW. Never record a stance on behalf of the other party. If the speaker refers to
+what the other party said earlier, that is context for interpreting THEIR words - it is not
+a new statement by the other party. A speaker cannot accept their own proposal; if they
+restate their own position, that is `propose`, not `accept`."""
+
+
+def build_context(neg: Negotiation, party: str, transcript: str,
+                  gloss: str | None = None) -> str:
+    """Everything the agent needs to attribute this utterance correctly.
+
+    `gloss` is an English translation of the same utterance, and it is not a nicety.
+    Measured on real Bulbul-synthesised speech, gpt-4o-mini misreads Indic numerals:
+    it turned Malayalam "പതിനയ്യായിരം" (15000) into 17000 and "അഞ്ഞൂറ്" (500) into 800,
+    inventing divergences between two parties who had actually agreed. A false
+    DIVERGED is as damaging on stage as a missed one. So the model reads AMOUNTS off
+    the English gloss and quotes VERBATIM from the native script.
+    """
+    from . import sarvam
+    me = sarvam.PARTIES[party]
+    other_id = next(p for p in sarvam.PARTIES if p != party)
+    other = sarvam.PARTIES[other_id]
+
+    sheet = "\n".join(
+        f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
+        for t in neg.terms.values() if t.state is not TermState.OPEN
+    ) or "(nothing discussed yet)"
+
+    gloss_block = (
+        f"\n\nENGLISH GLOSS of the same utterance (authoritative for NUMBERS and "
+        f"AMOUNTS - the native text above is authoritative for `verbatim`):\n{gloss}"
+        if gloss else ""
+    )
+
+    return (
+        f"PARTIES\n"
+        f"- {me['name']} speaks {me['label']}\n"
+        f"- {other['name']} speaks {other['label']}\n\n"
+        f"SPEAKING NOW: {me['name']} ({me['label']}). "
+        f"Everything below is {me['name']}'s words, nobody else's.\n\n"
+        f"CONVERSATION SO FAR\n{neg.transcript_history()}\n\n"
+        f"TERM SHEET\n{sheet}\n\n"
+        f"THIS UTTERANCE ({me['name']}, {me['label']}):\n{transcript}"
+        f"{gloss_block}"
+    )
 
 
 @dataclass
@@ -79,6 +126,7 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
     """
     res = TurnResult()
     updates: list[dict] = []
+    flags: list[tuple[str, str]] = []
 
     for call in calls:
         name = call.get("name")
@@ -87,19 +135,7 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
         if name == "update_term":
             updates.append(args)
         elif name == "flag_divergence":
-            key = args.get("term")
-            if key in neg.terms:
-                t = neg.terms[key]
-                # Defensive, not authoritative: only escalate a term that already
-                # carries provenance (proposals from at least one party). A term
-                # with no proposals has nothing to diverge between, and setting
-                # DIVERGED here would render with an empty quote list - the
-                # demo's key evidence, gone.
-                if t.proposals:
-                    t.state = TermState.DIVERGED
-                    t.agreed_value = None
-                    t.divergence_note = args.get("note", "")
-                    res.flagged.append(key)
+            flags.append((args.get("term"), args.get("note", "")))
         elif name == "request_clarification":
             res.clarification = args.get("question")
         elif name == "check_readiness":
@@ -111,6 +147,19 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
     if updates:
         res.flagged.extend(neg.apply(party, lang, updates, turn_idx))
         res.updates = updates
+
+    for key, note in flags:
+        t = neg.terms.get(key)
+        if t is not None and t.proposals:
+            # Defensive, not authoritative: only escalate a term that already
+            # carries provenance (proposals from at least one party). A term
+            # with no proposals has nothing to diverge between, and setting
+            # DIVERGED here would render with an empty quote list - the
+            # demo's key evidence, gone.
+            t.state = TermState.DIVERGED
+            t.agreed_value = None
+            t.divergence_note = note
+            res.flagged.append(key)
 
     # dedupe, preserve order
     res.flagged = list(dict.fromkeys(res.flagged))
@@ -131,19 +180,35 @@ def _parse_tool_calls(message: dict) -> list[dict]:
 
 
 async def run_turn(neg: Negotiation, party: str, lang: str,
-                   transcript: str, turn_idx: int) -> TurnResult:
-    """ONE sarvam-30b call per completed turn. Never called on a partial."""
-    sheet = "\n".join(
-        f"- {t.key}: {t.state.value}" + (f" = {t.agreed_value}" if t.agreed_value else "")
-        for t in neg.terms.values() if t.state is not TermState.OPEN
-    ) or "(nothing discussed yet)"
+                   transcript: str, turn_idx: int,
+                   gloss: str | None = None) -> TurnResult:
+    """ONE model call per completed turn. Never called on a partial.
 
-    message = await sarvam.chat_tools(
+    Pass `gloss` (an English translation of `transcript`) whenever you can afford the
+    extra /translate call - without it the model guesses at Indic numerals and
+    fabricates divergences. See build_context for the measured failure.
+    """
+    if gloss is None:
+        gloss = await _gloss(transcript, lang)
+
+    message = await llm.complete_with_tools(
         system=SYSTEM,
-        user=f"Current term sheet:\n{sheet}\n\nSpeaker ({party}, {lang}) said:\n{transcript}",
+        user=build_context(neg, party, transcript, gloss),
         tools=TOOLS,
     )
     res = apply_tool_calls(neg, party, lang, _parse_tool_calls(message), turn_idx)
     if not res.summary:
-        res.summary = (message.get("content") or transcript).strip()
+        # Prefer the English gloss over echoing native script back at the operator.
+        res.summary = (message.get("content") or gloss or transcript).strip()
     return res
+
+
+async def _gloss(transcript: str, lang: str) -> str:
+    """English gloss via /translate - its own 60/min bucket, so this does not eat
+    the reasoning budget. Returns "" on failure; the turn still runs, just blind
+    to numerals."""
+    from . import sarvam
+    try:
+        return await sarvam.translate(transcript, "en-IN", lang)
+    except Exception:  # noqa: BLE001
+        return ""

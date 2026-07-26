@@ -24,6 +24,13 @@ def test_vad_end_of_turn_event():
     assert kind == "turn_end"
 
 
+def test_send_error_signal_does_not_misfire_as_turn_end():
+    """A bare 'END' substring check would misfire on SEND_ERROR - it must not
+    classify as turn_end."""
+    kind, _ = classify({"type": "events", "data": {"signal_type": "SEND_ERROR"}})
+    assert kind != "turn_end"
+
+
 def test_error_message():
     kind, text = classify({"type": "error", "error": {"message": "bad codec"}})
     assert kind == "error"
