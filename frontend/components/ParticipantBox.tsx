@@ -16,7 +16,7 @@ export default function ParticipantBox({
 }) {
   if (!party) {
     return (
-      <div className="flex-1 h-28 lg:h-40 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500 text-xs">
+      <div className="flex-1 h-20 sm:h-28 lg:h-40 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500 text-xs">
         {placeholder}
       </div>
     );
@@ -24,12 +24,12 @@ export default function ParticipantBox({
 
   return (
     <div
-      className={`flex-1 h-28 lg:h-40 rounded-xl bg-neutral-900 border flex flex-col items-center justify-center gap-2 transition-colors ${
+      className={`flex-1 h-20 sm:h-28 lg:h-40 rounded-xl bg-neutral-900 border flex flex-col items-center justify-center gap-2 transition-colors ${
         speaking ? "border-emerald-500" : "border-neutral-800"
       }`}
     >
       <div
-        className="h-14 w-14 rounded-full flex items-center justify-center font-semibold text-lg text-white shrink-0"
+        className="h-10 w-10 sm:h-14 sm:w-14 rounded-full flex items-center justify-center font-semibold text-lg text-white shrink-0"
         style={{ backgroundColor: colorOf(party.name) }}
       >
         {initialsOf(party.name)}

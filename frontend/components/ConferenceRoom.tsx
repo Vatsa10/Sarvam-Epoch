@@ -79,8 +79,8 @@ export default function ConferenceRoom() {
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col">
-      <header className="flex items-center gap-3 px-6 py-4 border-b border-neutral-800 shrink-0">
+    <main className="h-[100dvh] overflow-hidden bg-neutral-950 text-neutral-100 flex flex-col">
+      <header className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-neutral-800 shrink-0">
         <div className="h-9 w-9 rounded-lg bg-blue-600 flex items-center justify-center font-semibold">N</div>
         <div>
           <h1 className="text-sm font-semibold leading-tight">NyayBandhan Meet</h1>
@@ -93,13 +93,13 @@ export default function ConferenceRoom() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 p-4 flex flex-col-reverse lg:flex-row gap-4">
-        <div className="flex flex-row lg:flex-col gap-3 w-full lg:w-64 shrink-0">
+      <div className="flex-1 min-h-0 p-3 sm:p-4 flex flex-col-reverse lg:flex-row gap-3 sm:gap-4">
+        <div className="flex flex-row lg:flex-col gap-2 sm:gap-3 w-full lg:w-64 shrink-0">
           <ParticipantBox party={me} placeholder="You" speaking={me ? speaking[me.party_id] : false} muted={muted} />
           <ParticipantBox party={other} placeholder="Waiting for the other person…" speaking={other ? speaking[other.party_id] : false} />
         </div>
 
-        <TermSheetPanel sheet={sheet} log={log} code={code} className="flex-1 min-h-[50vh]" />
+        <TermSheetPanel sheet={sheet} log={log} code={code} className="flex-1 min-h-0" />
       </div>
 
       <ControlBar

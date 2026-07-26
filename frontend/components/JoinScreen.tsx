@@ -51,7 +51,7 @@ export default function JoinScreen({
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100 p-6">
-      <form onSubmit={submit} className="w-full max-w-sm bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4">
+      <form onSubmit={submit} className="w-full max-w-sm w-full mx-auto bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4">
         <div>
           <h1 className="text-xl font-semibold">NyayBandhan Meet</h1>
           <p className="text-sm text-neutral-400 mt-1">Live translated call for two people.</p>
@@ -84,7 +84,7 @@ export default function JoinScreen({
         <label className="block text-sm">
           Your name
           <input
-            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -94,7 +94,7 @@ export default function JoinScreen({
         <label className="block text-sm">
           You speak
           <select
-            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={lang}
             onChange={(e) => setLang(e.target.value)}
           >
@@ -107,7 +107,7 @@ export default function JoinScreen({
         <label className="block text-sm">
           You read &amp; hear
           <select
-            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={outLang}
             onChange={(e) => setOutLang(e.target.value)}
           >
@@ -126,7 +126,7 @@ export default function JoinScreen({
           <label className="block text-sm">
             You are the
             <select
-              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={role}
               onChange={(e) => setRole(e.target.value)}
             >
@@ -146,7 +146,7 @@ export default function JoinScreen({
         <label className="block text-sm">
           What you want <span className="text-neutral-500">(optional)</span>
           <textarea
-            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2.5 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             rows={2}
             maxLength={400}
             value={brief}

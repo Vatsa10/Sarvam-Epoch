@@ -46,10 +46,11 @@ export default function TermSheetPanel({
 
   return (
     <div className={`rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col min-h-0 ${className}`}>
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-neutral-800 shrink-0">
+      <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 border-b border-neutral-800 shrink-0">
         <span className="h-2 w-2 rounded-full bg-emerald-500" />
         <h2 className="text-sm font-semibold text-neutral-200">Live term sheet</h2>
-        <span className="text-xs text-neutral-500 ml-auto">Shared with both parties</span>
+        <span className="hidden sm:inline text-xs text-neutral-500 ml-auto">Shared with both parties</span>
+        <span className="sm:hidden ml-auto" />
         {roomCode && (
           <>
             <select
@@ -88,7 +89,7 @@ export default function TermSheetPanel({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <h3 className="text-xs uppercase tracking-wide text-neutral-500 mb-2">Terms</h3>
           {!sheet && <div className="text-sm text-neutral-500">Waiting to connect…</div>}
