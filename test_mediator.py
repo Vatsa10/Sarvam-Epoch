@@ -198,6 +198,110 @@ def test_magnitude_check_leaves_explicit_units_alone():
     assert magnitude_doubt("rent", "17") == "17000"
 
 
+
+def test_a_question_never_becomes_a_proposal():
+    """"What is the rent?" names no value. An update with a blank value must be
+    dropped, or the sheet shows a position nobody took."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    flagged = n.apply("vatsa", "gu-IN", [{"term": "rent", "value": "",
+                      "verbatim": "bhaadu shu chhe?", "stance": "propose"}], 0)
+    assert n.terms["rent"].state is TermState.OPEN
+    assert n.terms["rent"].proposals == []
+    assert flagged == []
+
+
+def test_whitespace_only_value_is_also_dropped():
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("vatsa", "gu-IN", [{"term": "deposit", "value": "   ",
+            "verbatim": "?", "stance": "propose"}], 0)
+    assert n.terms["deposit"].state is TermState.OPEN
+
+
+def test_plausible_ranges_are_overridable_without_editing_code():
+    """Floors must be tunable on the venue floor. Editing Python between demo runs
+    is how a syntax error reaches a projector.
+
+    Calls _load_plausible() directly rather than reloading the module: importlib
+    .reload swaps the TermState class identity out from under every other test.
+    """
+    import json as _json
+    import os
+    import tempfile
+    from app.mediator import _load_plausible
+
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "plausible.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            _json.dump({"rent": [50, 900]}, fh)
+        os.environ["PLAUSIBLE_JSON"] = f
+        try:
+            ranges = _load_plausible()
+        finally:
+            del os.environ["PLAUSIBLE_JSON"]
+    assert ranges["rent"] == (50, 900)
+    assert ranges["deposit"] == (3000, 5_000_000), "unlisted keys keep their defaults"
+
+
+def test_malformed_override_falls_back_to_defaults():
+    """A bad override must never take the app down mid-demo."""
+    import os
+    import tempfile
+    from app.mediator import _load_plausible
+
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "plausible.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write("{not json")
+        os.environ["PLAUSIBLE_JSON"] = f
+        try:
+            ranges = _load_plausible()
+        finally:
+            del os.environ["PLAUSIBLE_JSON"]
+    assert ranges["rent"] == (1500, 1_000_000)
+
+
+def test_near_floor_numbers_are_not_blown_up():
+    """1400 is a low rent, not a shorthand. Scaling it would propose 1,400,000 -
+    turning a slightly-odd figure into an absurd one."""
+    from app.mediator import magnitude_doubt
+    assert magnitude_doubt("rent", "1400") is None
+    assert magnitude_doubt("rent", "500") is None
+    assert magnitude_doubt("rent", "99") == "99000"
+    assert magnitude_doubt("rent", "17") == "17000"
+    assert magnitude_doubt("deposit", "50") == "50000"
+
+
+
+def test_silent_scaling_is_challenged_not_accepted():
+    """Speaker said "17", model wrote 17000. Probably right - but it is a guess
+    about money, and 17 could have meant 1700. Confirm rather than assume."""
+    from app.mediator import Negotiation, scaled_without_asking
+    assert scaled_without_asking("rent", "₹17", "17000") == "17000"
+    assert scaled_without_asking("rent", "17000", "17000") is None   # no rewrite
+    assert scaled_without_asking("rent", "pandar hajaar", "15000") is None  # no digits
+    assert scaled_without_asking("rent", "₹17", "45000") is None  # unrelated number
+    assert scaled_without_asking("duration", "11", "11000") is None   # no range for duration
+
+    n = Negotiation()
+    flagged = n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+                      "verbatim": "₹17", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt and "17000" in n.terms["rent"].doubt
+    assert "rent" in flagged
+    assert n.terms["rent"].agreed_value is None
+
+
+def test_honest_amounts_are_not_challenged():
+    """The guard must not nag about numbers the speaker actually said."""
+    from app.mediator import Negotiation, TermState
+    n = Negotiation()
+    n.apply("sreedev", "ml-IN", [{"term": "rent", "value": "17000",
+            "verbatim": "17000 rupa", "stance": "propose"}], 0)
+    assert n.terms["rent"].doubt is None
+    assert n.terms["rent"].state is TermState.PROPOSED
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

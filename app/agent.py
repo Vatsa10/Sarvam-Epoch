@@ -79,6 +79,11 @@ ask them to confirm a number they just stated explicitly ("fourteen thousand" ne
 "did you mean fourteen thousand?"). Asking about something unambiguous makes the system
 look deaf, and you only get one question per turn — spend it where it is needed.
 
+A QUESTION IS NOT A PROPOSAL. "What is the rent?" / "How long is the lease?" asks for
+a value, it does not offer one. Call NO tool for a pure question — do not invent a
+placeholder value, and do not record the term as PROPOSED. Answer it by relaying the
+question. Only call update_term when the speaker actually states a position.
+
 AMOUNTS AND MAGNITUDE. People state rent in shorthand: "seventeen" means seventeen
 thousand, not seventeen rupees. If a stated amount would be absurd taken literally — a
 monthly rent of 17, a deposit of 50 — do NOT record it. Call request_clarification and
@@ -172,7 +177,17 @@ def apply_tool_calls(neg: Negotiation, party: str, lang: str,
         res.flagged.extend(neg.apply(party, lang, updates, turn_idx))
         res.updates = updates
 
+    # A counter-offer can never be a divergence, and the prompt saying so is not
+    # enough - observed live, the model countered 14000 against 17000 AND called
+    # flag_divergence on the same turn, and since flags apply last it overwrote
+    # PROPOSED back to DIVERGED. Divergence means both sides think they agreed;
+    # someone who just said "that is too much" plainly does not. Enforce it here,
+    # where a prompt cannot be ignored.
+    countered = {u.get("term") for u in updates if u.get("stance") == "counter"}
+
     for key, note in flags:
+        if key in countered:
+            continue
         t = neg.terms.get(key)
         if t is not None and t.proposals:
             # Defensive, not authoritative: only escalate a term that already

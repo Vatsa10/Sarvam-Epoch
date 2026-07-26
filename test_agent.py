@@ -156,6 +156,51 @@ def test_context_history_does_not_leak_into_the_current_utterance_block():
     assert "OLDWORDS" not in tail
 
 
+
+def test_flag_divergence_is_ignored_on_a_counter_offer():
+    """Observed live: the model countered 14000 against 17000 and ALSO called
+    flag_divergence in the same turn. Flags apply last, so it overwrote PROPOSED
+    back to DIVERGED. A counter-offer is open disagreement - the opposite of
+    divergence - so the flag must be dropped in code, not just discouraged in the
+    prompt."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "sreedev", "ml-IN", [{"name": "update_term", "arguments": {
+        "term": "rent", "value": "17000", "verbatim": "pathinezhayiram",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "vatsa", "gu-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "rent", "value": "14000", "verbatim": "chaud hajaar",
+            "stance": "counter"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "rent", "note": "they disagree on rent"}},
+    ], 1)
+    t = neg.terms["rent"]
+    assert t.state is TermState.PROPOSED, f"counter must not become {t.state}"
+    assert t.divergence_note is None
+    assert "rent" not in res.flagged
+
+
+def test_flag_divergence_still_works_when_there_was_no_counter():
+    """The guard must not disarm real divergence detection."""
+    from app.agent import apply_tool_calls
+    from app.mediator import Negotiation, TermState
+    neg = Negotiation()
+    apply_tool_calls(neg, "vatsa", "gu-IN", [{"name": "update_term", "arguments": {
+        "term": "maintenance", "value": "actual", "verbatim": "alag",
+        "stance": "propose"}}], 0)
+    res = apply_tool_calls(neg, "sreedev", "ml-IN", [
+        {"name": "update_term", "arguments": {
+            "term": "maintenance", "value": "fixed 500", "verbatim": "500",
+            "stance": "accept"}},
+        {"name": "flag_divergence", "arguments": {
+            "term": "maintenance", "note": "actual vs fixed 500"}},
+    ], 1)
+    assert neg.terms["maintenance"].state is TermState.DIVERGED
+    assert "maintenance" in res.flagged
+
+
 if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_"):

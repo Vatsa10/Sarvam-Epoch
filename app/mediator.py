@@ -69,32 +69,101 @@ class Term:
 # never literal - people say "seventeen" and mean seventeen thousand. Recording
 # rent = 17 is not a small error, it is a nonsense contract, so the system must
 # ask before it writes anything down.
-PLAUSIBLE = {
+#
+# These are TUNABLE WITHOUT EDITING CODE: drop a plausible.json next to this repo
+# (or point PLAUSIBLE_JSON at one) shaped {"rent": [1500, 1000000], ...}. Editing
+# Python between demo runs is how you ship a syntax error to a projector.
+_DEFAULT_PLAUSIBLE: dict[str, tuple[int, int]] = {
     "rent":        (1500, 1_000_000),
     "deposit":     (3000, 5_000_000),
     "maintenance": (100, 200_000),
 }
 
 
+def _load_plausible() -> dict[str, tuple[int, int]]:
+    import os
+    import pathlib
+
+    path = pathlib.Path(os.getenv(
+        "PLAUSIBLE_JSON",
+        pathlib.Path(__file__).resolve().parent.parent / "plausible.json"))
+    ranges = dict(_DEFAULT_PLAUSIBLE)
+    if not path.exists():
+        return ranges
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for key, pair in raw.items():
+            lo, hi = int(pair[0]), int(pair[1])
+            if lo > 0 and hi > lo:
+                ranges[key] = (lo, hi)
+    except (json.JSONDecodeError, OSError, TypeError, ValueError, KeyError, IndexError):
+        # A malformed override must never take the app down mid-demo - fall back
+        # to the built-in ranges and carry on.
+        return dict(_DEFAULT_PLAUSIBLE)
+    return ranges
+
+
+PLAUSIBLE = _load_plausible()
+
+# Below this, a bare number is read as spoken shorthand ("seventeen" = 17000).
+# At or above it, the figure is taken literally even if it is under the floor.
+SHORTHAND_MAX = 100
+
+
 def magnitude_doubt(term_key: str, value: str) -> str | None:
     """Return a suggested reading when a bare number is implausibly small.
 
-    "17" for rent -> "17000". Returns None when the value is fine, non-numeric,
-    or carries an explicit unit we should not second-guess.
+    "17" for rent -> "17000".
+
+    Returns None - i.e. trust the value as stated - when it is non-numeric, has no
+    configured range, or CARRIES ANY WORDS. That last rule is deliberate and load
+    bearing: "fixed 500" and "actual" are real, meaningful answers for maintenance,
+    and the difference between them is exactly the divergence this product exists to
+    catch. Second-guessing a value with words attached would destroy that signal to
+    fix a problem it does not have.
     """
     lo, _hi = PLAUSIBLE.get(term_key, (None, None))
     if lo is None:
         return None
+    alnum = "".join(ch for ch in value if ch.isalnum())
     digits = "".join(ch for ch in value if ch.isdigit())
-    if not digits or digits != "".join(ch for ch in value if ch.isalnum()):
-        return None                      # has words attached - trust it
+    if not digits or digits != alnum:
+        return None                      # words attached (or nothing) - trust it
     n = int(digits)
     if n <= 0 or n >= lo:
         return None
-    for mult in (1000, 100):             # seventeen -> 17000, then 1700
-        if lo <= n * mult:
-            return str(n * mult)
-    return None
+
+    # Only SPOKEN-SHORTHAND numbers get corrected. "seventeen" (17) obviously means
+    # seventeen thousand. But 1400 is just a low rent, and blindly scaling it would
+    # propose 1,400,000 - turning a slightly-odd figure into an absurd one. Anything
+    # at or above SHORTHAND_MAX is taken as stated.
+    if n >= SHORTHAND_MAX:
+        return None
+    return str(n * 1000)
+
+
+def scaled_without_asking(term_key: str, verbatim: str, value: str) -> str | None:
+    """Catch the model quietly upgrading a shorthand instead of asking about it.
+
+    The speaker said "17"; the model wrote 17000. That is probably right, but it is
+    still a GUESS about money, and 17 could equally have meant 1700. Whether the
+    model asks is not reliably steerable by prompt - observed asking on one run and
+    silently normalising the identical utterance on the next - so the confirmation
+    is enforced here instead.
+
+    Returns the value the model assumed, so the question can name it.
+    """
+    if term_key not in PLAUSIBLE:
+        return None
+    spoken = "".join(ch for ch in verbatim if ch.isdigit())
+    written = "".join(ch for ch in value if ch.isdigit())
+    if not spoken or not written or spoken == written:
+        return None
+    if int(spoken) >= SHORTHAND_MAX:
+        return None                      # not shorthand; some other rewrite
+    if not written.startswith(spoken):
+        return None                      # unrelated number, not a scaling
+    return value
 
 
 @dataclass
@@ -133,6 +202,14 @@ class Negotiation:
             key = u.get("term")
             if key not in self.terms:
                 continue
+
+            # A QUESTION IS NOT A PROPOSAL. "What is the rent?" names no value, and
+            # a term update carrying no value would otherwise land as a PROPOSED row
+            # with a blank amount - a phantom position nobody actually took, which
+            # then contaminates every later comparison. Drop it.
+            if not str(u.get("value", "")).strip():
+                continue
+
             term = self.terms[key]
             other = self._other_party(party)
             prior = term.latest_by(other)
@@ -150,7 +227,8 @@ class Negotiation:
             # Before anything is recorded: is this number even possible? "17" for a
             # monthly rent is not a cheap flat, it is a misheard "seventeen thousand".
             if prop.stance in ("propose", "counter", "accept"):
-                likely = magnitude_doubt(key, prop.value)
+                likely = (magnitude_doubt(key, prop.value)
+                          or scaled_without_asking(key, prop.verbatim, prop.value))
                 if likely:
                     term.doubt = (
                         f"{party} said '{prop.value}' for {key} — that is implausibly "
