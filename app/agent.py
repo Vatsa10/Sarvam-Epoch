@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 from . import sarvam
+from . import llm
 from .mediator import Negotiation, TERMS, TermState
 
 TOOLS = [
@@ -138,7 +139,7 @@ async def run_turn(neg: Negotiation, party: str, lang: str,
         for t in neg.terms.values() if t.state is not TermState.OPEN
     ) or "(nothing discussed yet)"
 
-    message = await sarvam.chat_tools(
+    message = await llm.complete_with_tools(
         system=SYSTEM,
         user=f"Current term sheet:\n{sheet}\n\nSpeaker ({party}, {lang}) said:\n{transcript}",
         tools=TOOLS,
