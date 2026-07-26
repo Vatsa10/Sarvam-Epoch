@@ -36,7 +36,11 @@ export default function ParticipantBox({
       </div>
       <div className="text-center">
         <div className="text-sm font-medium">{party.name}{muted ? " (muted)" : ""}</div>
-        <div className="text-xs text-neutral-500">{party.lang}</div>
+        <div className="text-xs text-neutral-500">
+          {party.out_lang && party.out_lang !== party.lang
+            ? `${party.lang} → ${party.out_lang}`
+            : party.lang}
+        </div>
       </div>
     </div>
   );

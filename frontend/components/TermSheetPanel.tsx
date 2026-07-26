@@ -1,6 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import type { LogEntry, Sheet } from "@/lib/types";
+
+const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+
+// The lawyer is a third party to the call and may read a third language again.
+const LAWYER_LANGS = [
+  ["en-IN", "English"], ["hi-IN", "हिन्दी"], ["ml-IN", "മലയാളം"],
+  ["ta-IN", "தமிழ்"], ["te-IN", "తెలుగు"], ["kn-IN", "ಕನ್ನಡ"],
+  ["mr-IN", "मराठी"], ["gu-IN", "ગુજરાતી"], ["bn-IN", "বাংলা"],
+];
 
 const STATE_STYLE: Record<string, string> = {
   OPEN: "bg-neutral-800 text-neutral-400",
@@ -14,13 +24,23 @@ const STATE_STYLE: Record<string, string> = {
 export default function TermSheetPanel({
   sheet,
   log,
+  code,
   className = "",
 }: {
   sheet: Sheet | null;
   log: LogEntry[];
+  code?: string;
   className?: string;
 }) {
   const blocked = sheet?.blocked ?? [];
+  const [lawyerLang, setLawyerLang] = useState("en-IN");
+  // Falls back to the ?code= the share link carries, so the button works even
+  // where the room code isn't passed down as a prop.
+  const roomCode =
+    code ??
+    (typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("code"));
 
   return (
     <div className={`rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col min-h-0 ${className}`}>
@@ -28,6 +48,31 @@ export default function TermSheetPanel({
         <span className="h-2 w-2 rounded-full bg-emerald-500" />
         <h2 className="text-sm font-semibold text-neutral-200">Live term sheet</h2>
         <span className="text-xs text-neutral-500 ml-auto">Shared with both parties</span>
+        {roomCode && (
+          <>
+            <select
+              value={lawyerLang}
+              onChange={(e) => setLawyerLang(e.target.value)}
+              title="Lawyer's language"
+              className="text-xs bg-neutral-800 border border-neutral-700 rounded px-1.5 py-1 text-neutral-300"
+            >
+              {LAWYER_LANGS.map(([c, label]) => (
+                <option key={c} value={c}>{label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() =>
+                window.open(
+                  `${API}/api/meet/rooms/${encodeURIComponent(roomCode)}/draft?lang=${lawyerLang}`,
+                  "_blank"
+                )
+              }
+              className="text-xs font-medium rounded px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white"
+            >
+              Draft agreement
+            </button>
+          </>
+        )}
       </div>
 
       {blocked.length > 0 && (

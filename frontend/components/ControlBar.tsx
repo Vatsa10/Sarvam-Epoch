@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Copy, Mic, MicOff, PhoneOff } from "lucide-react";
+import { fetchLanguages } from "@/lib/api";
+import type { Language } from "@/lib/types";
 
 export default function ControlBar({
   code,
@@ -15,6 +17,8 @@ export default function ControlBar({
   otherName,
   onTalkStart,
   onTalkDone,
+  outLang,
+  onOutLangChange,
 }: {
   code: string;
   muted: boolean;
@@ -27,8 +31,15 @@ export default function ControlBar({
   otherName: string | null;
   onTalkStart: () => void;
   onTalkDone: () => void;
+  outLang: string;
+  onOutLangChange: (lang: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [languages, setLanguages] = useState<Language[]>([]);
+
+  useEffect(() => {
+    fetchLanguages().then(setLanguages).catch(() => setLanguages([]));
+  }, []);
 
   const talkDisabled = !otherPresent || !isMyTurn || processing;
   const talkLabel = !otherPresent
@@ -94,7 +105,16 @@ export default function ControlBar({
         </button>
       </div>
 
-      <div className="w-24" />
+      <select
+        value={outLang}
+        onChange={(e) => onOutLangChange(e.target.value)}
+        title="Language you read and hear"
+        className="rounded-lg bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-xs text-neutral-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        {languages.map((l) => (
+          <option key={l.code} value={l.code}>Hear: {l.label}</option>
+        ))}
+      </select>
     </div>
   );
 }

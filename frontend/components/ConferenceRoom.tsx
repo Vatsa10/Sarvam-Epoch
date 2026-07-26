@@ -34,11 +34,11 @@ export default function ConferenceRoom() {
     setCode(null);
   };
 
-  const join = async (roomCode: string, name: string, lang: string) => {
+  const join = async (roomCode: string, name: string, lang: string, outLang: string) => {
     setCode(roomCode);
     useMeetStore.getState().setStatus("connecting");
 
-    const socket = connectMeet(roomCode, name, lang, applyServerEvent, () => {
+    const socket = connectMeet(roomCode, name, lang, outLang, applyServerEvent, () => {
       useMeetStore.getState().setStatus("closed");
     });
     socketRef.current = socket;
@@ -98,7 +98,7 @@ export default function ConferenceRoom() {
           <ParticipantBox party={other} placeholder="Waiting for the other person…" speaking={other ? speaking[other.party_id] : false} />
         </div>
 
-        <TermSheetPanel sheet={sheet} log={log} className="flex-1 min-h-[50vh]" />
+        <TermSheetPanel sheet={sheet} log={log} code={code} className="flex-1 min-h-[50vh]" />
       </div>
 
       <ControlBar
@@ -113,6 +113,8 @@ export default function ConferenceRoom() {
         otherName={other?.name ?? null}
         onTalkStart={talkStart}
         onTalkDone={talkDone}
+        outLang={me?.out_lang ?? me?.lang ?? ""}
+        onOutLangChange={(l) => socketRef.current?.setOutLang(l)}
       />
     </main>
   );

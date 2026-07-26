@@ -7,11 +7,12 @@ import type { Language } from "@/lib/types";
 export default function JoinScreen({
   onReady,
 }: {
-  onReady: (code: string, name: string, lang: string) => void;
+  onReady: (code: string, name: string, lang: string, outLang: string) => void;
 }) {
   const [mode, setMode] = useState<"create" | "join">("create");
   const [name, setName] = useState("");
   const [lang, setLang] = useState("en-IN");
+  const [outLang, setOutLang] = useState("en-IN");
   const [code, setCode] = useState("");
   const [languages, setLanguages] = useState<Language[]>([]);
   const [busy, setBusy] = useState(false);
@@ -35,7 +36,7 @@ export default function JoinScreen({
     try {
       const roomCode = mode === "create" ? (await createRoom()).code : code.trim().toUpperCase();
       if (!roomCode) throw new Error("Enter a meeting code");
-      onReady(roomCode, name.trim(), lang);
+      onReady(roomCode, name.trim(), lang, outLang || lang);
     } catch (err) {
       setError((err as Error).message || "Could not start the call");
       setBusy(false);
@@ -85,7 +86,7 @@ export default function JoinScreen({
         </label>
 
         <label className="block text-sm">
-          Your language
+          You speak
           <select
             className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={lang}
@@ -95,6 +96,22 @@ export default function JoinScreen({
               <option key={l.code} value={l.code}>{l.label}</option>
             ))}
           </select>
+        </label>
+
+        <label className="block text-sm">
+          You read &amp; hear
+          <select
+            className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={outLang}
+            onChange={(e) => setOutLang(e.target.value)}
+          >
+            {languages.map((l) => (
+              <option key={l.code} value={l.code}>{l.label}</option>
+            ))}
+          </select>
+          <span className="mt-1 block text-xs text-neutral-500">
+            Captions and the spoken relay arrive in this language.
+          </span>
         </label>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
