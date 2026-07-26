@@ -45,6 +45,11 @@ KEY = os.getenv("SARVAM_API_KEY", "")
 RATE = 16000          # Saaras streaming wants 16k; matches the browser AudioWorklet
 CHUNK = 1600          # 100ms
 
+# Barge-in thresholds. Tune BARGE_LEVEL up in a loud room or the agent's own audio
+# leaking through the speakers will interrupt itself; headphones make this moot.
+BARGE_LEVEL = 0.12    # peak amplitude, 0-1
+BARGE_BLOCKS = 3      # consecutive 100ms blocks above the level = real speech
+
 LANGS = {
     "1": ("gu-IN", "Gujarati"),
     "2": ("ml-IN", "Malayalam"),
@@ -180,21 +185,160 @@ async def _mediate(neg, party: str, lang: str, transcript: str,
     print(f"  agent  : {res.summary}")
     if res.clarification:
         print(f"  ASKS   : {res.clarification}")
+    _print_sheet(neg.sheet())
 
-    sheet = neg.sheet()
+
+def _print_sheet(sheet: dict) -> None:
     mark = {"AGREED": "✓", "DIVERGED": "✗", "HEDGED": "~", "PROPOSED": "·",
             "REJECTED": "✗", "OPEN": " "}
     print("\n  ── term sheet ──")
+    shown = False
     for t in sheet["terms"]:
         if t["state"] == "OPEN":
             continue
+        shown = True
         print(f"   {mark.get(t['state'],' ')} {t['key']:14} {t['state']:9} {t['agreed_value'] or ''}")
         if t["divergence_note"]:
             print(f"       ! {t['divergence_note']}")
+    if not shown:
+        print("   (nothing discussed yet)")
     if sheet["blocked"]:
         print(f"   BLOCKED: {', '.join(sheet['blocked'])} — will not draft")
-    elif sheet["drafting_safe"]:
+    elif sheet["drafting_safe"] and shown:
         print("   safe to draft")
+
+
+def play(b64: str, barge_in: bool = True) -> bool:
+    """Play Bulbul audio. Returns True if the listener barged in over it.
+
+    Barge-in is not a nicety here: the whole product is two people talking, and a
+    person who has heard enough will start replying before the agent stops. We watch
+    the mic while playing and cut the audio the moment real speech lands.
+    """
+    import base64
+    wav = base64.b64decode(b64)
+    with wave.open(io.BytesIO(wav)) as w:
+        rate, pcm = w.getframerate(), np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+
+    sd.play(pcm, rate)
+    if not barge_in:
+        sd.wait()
+        return False
+
+    hot = 0                      # consecutive loud blocks
+    interrupted = False
+
+    def watch(indata, _f, _t, _s):
+        nonlocal hot, interrupted
+        if float(np.abs(indata).max()) / 32768.0 > BARGE_LEVEL:
+            hot += 1
+            if hot >= BARGE_BLOCKS:
+                interrupted = True
+        else:
+            hot = 0
+
+    with sd.InputStream(samplerate=RATE, channels=1, dtype="int16",
+                        blocksize=CHUNK, callback=watch):
+        while sd.get_stream().active:
+            if interrupted:
+                sd.stop()
+                print("  ⟨barge-in — stopped speaking⟩")
+                break
+            sd.sleep(50)
+    return interrupted
+
+
+async def say(text: str, lang: str, speaker: str, client: SarvamAI) -> None:
+    """Speak text aloud in `lang`. Never fatal — a silent turn beats a crash."""
+    if not text.strip():
+        return
+    try:
+        r = client.text_to_speech.convert(
+            text=text[:2500], target_language_code=lang,
+            model="bulbul:v3", speaker=speaker, speech_sample_rate=22050,
+        )
+        if r.audios:
+            play(r.audios[0])
+    except Exception as e:  # noqa: BLE001
+        print(f"  (tts failed: {type(e).__name__})")
+
+
+async def listen(mediate: bool = True) -> None:
+    """Full conversational loop: you speak, it understands in context, it speaks back.
+
+    You play both parties in turn. The agent always speaks to the LISTENER in the
+    LISTENER's language — a clarifying question when the sheet just broke, the relay
+    of what was said otherwise. That is exactly what happens on the real call.
+    """
+    client = SarvamAI(api_subscription_key=KEY)
+    from app import agent, sarvam as sv
+    from app.mediator import Negotiation, Turn
+
+    neg = Negotiation("listen")
+    party = "vatsa"
+
+    print("\n  Two parties, no common language. You play both, one turn at a time.")
+    print("  The agent replies aloud in the listener's language. Ctrl+C to quit.\n")
+
+    while True:
+        try:
+            me = sv.PARTIES[party]
+            other_id = next(p for p in sv.PARTIES if p != party)
+            other = sv.PARTIES[other_id]
+            print(f"── {me['name']} ({me['label']}) speaks — {other['name']} will hear it in {other['label']}")
+
+            pcm = record()
+            if pcm.size < RATE // 4:
+                print("  too short\n")
+                continue
+
+            r = client.speech_to_text.transcribe(
+                file=("turn.wav", to_wav(pcm), "audio/wav"),
+                model="saaras:v3", language_code=me["lang"],
+            )
+            transcript = (getattr(r, "transcript", "") or "").strip()
+            if not transcript:
+                print("  ✗ empty transcript\n")
+                continue
+            print(f"  heard : {transcript}")
+
+            gloss = await sv.translate(transcript, "en-IN", me["lang"])
+            print(f"  gloss : {gloss}")
+
+            res = await agent.run_turn(neg, party, me["lang"], transcript,
+                                       len(neg.turns), gloss=gloss)
+
+            # What the agent says is decided by what just happened to the sheet.
+            if res.clarification:
+                spoken_en, why = res.clarification, "asks"
+            elif res.flagged:
+                spoken_en, why = (
+                    f"Wait — you two have not actually agreed on {', '.join(res.flagged)}.",
+                    "flags")
+            else:
+                spoken_en, why = gloss or transcript, "relays"
+
+            # formal, not code-mixed: this line gets SPOKEN, and stranded English
+            # words mid-sentence sound wrong out of Bulbul.
+            spoken = await sv.translate(spoken_en, other["lang"], "en-IN",
+                                        mode="formal") or spoken_en
+
+            neg.turns.append(Turn(idx=len(neg.turns), party=party, lang=me["lang"],
+                                  transcript=transcript, relay_text=spoken,
+                                  interjection=res.clarification))
+
+            print(f"  {why} → {other['name']} ({other['label']}): {spoken}")
+            await say(spoken, other["lang"], other["speaker"], client)
+
+            _print_sheet(neg.sheet())
+            party = other_id
+            print()
+        except KeyboardInterrupt:
+            print("\n  final sheet:")
+            _print_sheet(neg.sheet())
+            await sv.aclose()
+            print("\nbye\n")
+            return
 
 
 async def stream(src_code: str, src_name: str) -> None:
@@ -240,6 +384,8 @@ async def stream(src_code: str, src_name: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--listen", action="store_true",
+                    help="full loop: you speak, it understands in context and SPEAKS BACK")
     ap.add_argument("--stream", action="store_true", help="live partials + VAD signals")
     ap.add_argument("--mediate", action="store_true", help="also run the agent and print the term sheet")
     ap.add_argument("--list-devices", action="store_true")
@@ -251,6 +397,13 @@ def main() -> int:
     if not KEY:
         print("SARVAM_API_KEY not set — check .env")
         return 1
+
+    if a.listen:
+        try:
+            asyncio.run(listen())
+        except KeyboardInterrupt:
+            print("\nbye\n")
+        return 0
 
     src_code, src_name = pick("You speak:", "1")
     if a.stream:
